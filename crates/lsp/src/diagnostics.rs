@@ -26,26 +26,34 @@ pub async fn compile_file(
     // Suppress info logging
     cmd.arg("--quiet");
 
-    // Determine the file to compile and the include dirs.
-    // Strategy: write the current source to a temp file and use the nasher
-    // cache (flat directory) as --dirs. This matches how nasher compiles
-    // and avoids duplicate function errors from multi-directory --dirs.
+    // Strategy: write the current source to an isolated temp directory and
+    // compile with --dirs pointing at the nasher cache. Using a unique temp
+    // dir per compilation ensures no stale .nss files pollute the resman.
     let (compile_path, _temp_dir) = if let Some(cache_dir) = nasher_cache {
-        // Write current source to a temp file
-        let temp_dir = std::env::temp_dir().join("nwscript-lsp");
-        let _ = std::fs::create_dir_all(&temp_dir);
+        // Create a unique temp directory (only this file lives there)
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let temp_dir = std::env::temp_dir().join(format!("nwscript-lsp-{unique_id}"));
+        if std::fs::create_dir_all(&temp_dir).is_err() {
+            return Vec::new();
+        }
         let temp_file = temp_dir.join(
             file_path
                 .file_name()
                 .unwrap_or_else(|| std::ffi::OsStr::new("temp.nss")),
         );
         if std::fs::write(&temp_file, source).is_err() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
             return Vec::new();
         }
 
+        tracing::debug!("compiling temp file {} with cache {}", temp_file.display(), cache_dir.display());
         cmd.arg("--dirs").arg(cache_dir);
         (temp_file, Some(temp_dir))
     } else {
+        tracing::debug!("no nasher cache found, using fallback dirs");
         // No nasher cache: fall back to passing extra dirs
         if !extra_dirs.is_empty() {
             let dirs_str = extra_dirs
@@ -79,6 +87,11 @@ pub async fn compile_file(
     let combined = format!("{stdout}\n{stderr}");
 
     tracing::debug!("compiler output: {combined}");
+
+    // Clean up temp dir
+    if let Some(ref temp_dir) = _temp_dir {
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
 
     parse_compiler_output(&combined)
 }

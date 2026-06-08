@@ -68,10 +68,28 @@ impl NwscriptLanguageServer {
             }
         }
 
-        // Find nasher cache for compiler diagnostics (preferred over --dirs)
-        let nasher_cache = crate::diagnostics::find_nasher_cache(workspace_dirs);
-        if let Some(ref cache) = nasher_cache {
-            tracing::info!("using nasher cache for compiler: {}", cache.display());
+        // Find nasher cache for compiler diagnostics (preferred over --dirs).
+        // Search both workspace dirs and parents of source dirs (nasher.cfg is
+        // typically next to the .nasher/ directory).
+        let mut cache_search_dirs = workspace_dirs.to_vec();
+        for src_dir in &source_dirs {
+            // Walk up from src dir to find .nasher/
+            let mut dir = src_dir.as_path();
+            while let Some(parent) = dir.parent() {
+                if !cache_search_dirs.contains(&parent.to_path_buf()) {
+                    cache_search_dirs.push(parent.to_path_buf());
+                }
+                dir = parent;
+                // Don't go further than 3 levels up
+                if cache_search_dirs.len() > 20 {
+                    break;
+                }
+            }
+        }
+        let nasher_cache = crate::diagnostics::find_nasher_cache(&cache_search_dirs);
+        match &nasher_cache {
+            Some(cache) => tracing::info!("using nasher cache for compiler: {}", cache.display()),
+            None => tracing::warn!("no nasher cache found — compiler diagnostics may show false positives"),
         }
         *self.nasher_cache.write().unwrap() = nasher_cache;
 
