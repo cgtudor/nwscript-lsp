@@ -1,75 +1,70 @@
-use nwscript_parser::{Declaration, ParsedFile};
-use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, InsertTextFormat,
-};
+use crate::index::{SymbolInfo, SymbolKind};
+use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
-/// Gather completion items from a parsed file.
-pub fn completions_from_file(parsed: &ParsedFile) -> Vec<CompletionItem> {
+/// Build completion items from cross-file visible symbols.
+pub fn completions_from_symbols(symbols: &[SymbolInfo]) -> Vec<CompletionItem> {
     let mut items = Vec::new();
+    let mut seen = std::collections::HashSet::new();
 
-    for decl in &parsed.declarations {
-        match decl {
-            Declaration::Function(f) => {
-                if let Some(name) = &f.name {
-                    let params: Vec<String> = f
-                        .params
-                        .iter()
-                        .enumerate()
-                        .map(|(i, p)| {
-                            let pname = p
-                                .name
-                                .as_ref()
-                                .map(|n| n.name.as_str())
-                                .unwrap_or("arg");
-                            format!("${{{}: {pname}}}", i + 1)
-                        })
-                        .collect();
-
-                    let snippet = if f.params.is_empty() {
-                        format!("{}()", name.name)
-                    } else {
-                        format!("{}({})", name.name, params.join(", "))
-                    };
-
-                    let detail = super::symbols::format_function_signature(f);
-
-                    items.push(CompletionItem {
-                        label: name.name.clone(),
-                        kind: Some(CompletionItemKind::FUNCTION),
-                        detail: Some(detail),
-                        insert_text: Some(snippet),
-                        insert_text_format: Some(InsertTextFormat::SNIPPET),
-                        ..Default::default()
-                    });
-                }
-            }
-            Declaration::Struct(s) => {
-                if let Some(name) = &s.name {
-                    items.push(CompletionItem {
-                        label: name.name.clone(),
-                        kind: Some(CompletionItemKind::STRUCT),
-                        detail: Some("struct".into()),
-                        ..Default::default()
-                    });
-                }
-            }
-            Declaration::GlobalVar(v) => {
-                if let Some(name) = &v.name {
-                    let kind = if v.is_const {
-                        CompletionItemKind::CONSTANT
-                    } else {
-                        CompletionItemKind::VARIABLE
-                    };
-                    items.push(CompletionItem {
-                        label: name.name.clone(),
-                        kind: Some(kind),
-                        detail: Some(super::symbols::format_type(&v.ty.kind)),
-                        ..Default::default()
-                    });
-                }
-            }
-            Declaration::Include(_) => {}
+    for sym in symbols {
+        // Skip struct fields in general completion (they appear on dot-completion)
+        if sym.kind == SymbolKind::StructField {
+            continue;
         }
+
+        // Deduplicate (prototypes + definitions produce same name)
+        if !seen.insert(&sym.name) {
+            continue;
+        }
+
+        let item = match sym.kind {
+            SymbolKind::Function => {
+                let snippet = if let Some(params) = &sym.params {
+                    if params.is_empty() {
+                        format!("{}()", sym.name)
+                    } else {
+                        let param_snippets: Vec<String> = params
+                            .iter()
+                            .enumerate()
+                            .map(|(i, p)| format!("${{{}: {}}}", i + 1, p.name))
+                            .collect();
+                        format!("{}({})", sym.name, param_snippets.join(", "))
+                    }
+                } else {
+                    format!("{}()", sym.name)
+                };
+
+                CompletionItem {
+                    label: sym.name.clone(),
+                    kind: Some(CompletionItemKind::FUNCTION),
+                    detail: Some(sym.detail.clone()),
+                    insert_text: Some(snippet),
+                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                    ..Default::default()
+                }
+            }
+            SymbolKind::Struct => CompletionItem {
+                label: sym.name.clone(),
+                kind: Some(CompletionItemKind::STRUCT),
+                detail: Some(sym.detail.clone()),
+                ..Default::default()
+            },
+            SymbolKind::Constant => CompletionItem {
+                label: sym.name.clone(),
+                kind: Some(CompletionItemKind::CONSTANT),
+                detail: Some(sym.detail.clone()),
+                ..Default::default()
+            },
+            SymbolKind::Variable => CompletionItem {
+                label: sym.name.clone(),
+                kind: Some(CompletionItemKind::VARIABLE),
+                detail: Some(sym.detail.clone()),
+                ..Default::default()
+            },
+            SymbolKind::StructField => continue,
+        };
+
+        items.push(item);
     }
 
     items
@@ -83,6 +78,7 @@ pub fn keyword_completions() -> Vec<CompletionItem> {
         "action", "sqlquery", "cassowary",
         "if", "else", "while", "for", "do", "switch", "case", "default",
         "break", "continue", "return", "const",
+        "TRUE", "FALSE", "OBJECT_SELF", "OBJECT_INVALID",
     ];
 
     keywords

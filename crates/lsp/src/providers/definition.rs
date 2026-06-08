@@ -1,101 +1,49 @@
-use nwscript_parser::{Declaration, LineIndex};
+use crate::index::{SymbolInfo, WorkspaceIndex};
+use nwscript_parser::LineIndex;
 use tower_lsp::lsp_types::{Location, Position, Url};
 
 use super::symbols::span_to_range;
 
-/// Find the definition of the symbol at the given position.
+/// Find the definition of the symbol at the given position, searching across files.
 pub fn goto_definition(
-    parsed: &nwscript_parser::ParsedFile,
+    index: &WorkspaceIndex,
     source: &str,
     line_index: &LineIndex,
     position: Position,
     uri: &Url,
 ) -> Option<Location> {
     let offset = line_index.offset(position.line, position.character)?;
+    let target_name = super::hover::find_ident_at(source, offset as usize)?;
 
-    // Find the identifier at this offset
-    let target_name = find_ident_at(source, offset as usize)?;
+    // Search visible symbols (own file + transitive includes)
+    let symbols = index.visible_symbols(uri);
 
-    // Search declarations for a matching definition
-    for decl in &parsed.declarations {
-        match decl {
-            Declaration::Function(f) => {
-                if let Some(name) = &f.name {
-                    if name.name == target_name {
-                        return Some(Location {
-                            uri: uri.clone(),
-                            range: span_to_range(name.span, line_index),
-                        });
+    // Prefer function definitions over prototypes
+    let mut best: Option<&SymbolInfo> = None;
+    for sym in &symbols {
+        if sym.name == target_name {
+            match best {
+                None => best = Some(sym),
+                Some(prev) => {
+                    // Prefer definitions (longer detail = has body)
+                    if prev.detail.ends_with(" {...}") || !sym.detail.ends_with(" {...}") {
+                        // Keep prev if it's already a definition
+                    } else {
+                        best = Some(sym);
                     }
                 }
             }
-            Declaration::Struct(s) => {
-                if let Some(name) = &s.name {
-                    if name.name == target_name {
-                        return Some(Location {
-                            uri: uri.clone(),
-                            range: span_to_range(name.span, line_index),
-                        });
-                    }
-                }
-
-                // Check struct fields
-                for field in &s.fields {
-                    if let Some(fname) = &field.name {
-                        if fname.name == target_name {
-                            return Some(Location {
-                                uri: uri.clone(),
-                                range: span_to_range(fname.span, line_index),
-                            });
-                        }
-                    }
-                }
-            }
-            Declaration::GlobalVar(v) => {
-                if let Some(name) = &v.name {
-                    if name.name == target_name {
-                        return Some(Location {
-                            uri: uri.clone(),
-                            range: span_to_range(name.span, line_index),
-                        });
-                    }
-                }
-            }
-            Declaration::Include(_) => {}
         }
     }
 
-    None
-}
+    let sym = best?;
 
-/// Extract the identifier word at the given byte offset.
-fn find_ident_at(source: &str, offset: usize) -> Option<String> {
-    let bytes = source.as_bytes();
+    // Need the target file's line index to convert spans
+    let target_file = index.get_file(&sym.uri)?;
+    let range = span_to_range(sym.span, &target_file.line_index);
 
-    if offset >= bytes.len() {
-        return None;
-    }
-
-    // Check if we're on an identifier character
-    if !is_ident_char(bytes[offset]) {
-        return None;
-    }
-
-    // Find start of identifier
-    let mut start = offset;
-    while start > 0 && is_ident_char(bytes[start - 1]) {
-        start -= 1;
-    }
-
-    // Find end of identifier
-    let mut end = offset;
-    while end < bytes.len() && is_ident_char(bytes[end]) {
-        end += 1;
-    }
-
-    Some(source[start..end].to_string())
-}
-
-fn is_ident_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
+    Some(Location {
+        uri: sym.uri.clone(),
+        range,
+    })
 }

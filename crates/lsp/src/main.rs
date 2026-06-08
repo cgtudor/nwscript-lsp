@@ -3,6 +3,8 @@ use tracing_subscriber::EnvFilter;
 
 mod diagnostics;
 mod document;
+mod index;
+mod nasher;
 mod providers;
 mod server;
 

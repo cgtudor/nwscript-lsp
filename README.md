@@ -6,11 +6,14 @@ Built in Rust with [tower-lsp](https://github.com/ebkalderon/tower-lsp), featuri
 
 ## Features
 
+- **Workspace indexing** — scans all `.nss` files on startup, auto-discovers source dirs from `nasher.cfg`
+- **Cross-file include resolution** — follows `#include` graph with cycle detection, transitive symbol visibility
 - **Diagnostics** — real-time parse errors as you type, plus full compiler diagnostics on save (via bundled `nwn_script_comp`)
 - **Document symbols** — outline of functions, structs, constants, and global variables
-- **Completion** — functions, structs, constants, keywords, with snippet support for function parameters
-- **Hover** — type information and doc comments for functions, structs, and variables
-- **Go to definition** — jump to function, struct, and variable definitions
+- **Completion** — functions, structs, constants from current file and all includes, with snippet support for parameters
+- **Hover** — type information and doc comments for functions, structs, and variables across files
+- **Go to definition** — jump to definitions across files (follows includes)
+- **Signature help** — parameter hints when typing function calls (triggered on `(` and `,`)
 
 ## Architecture
 
@@ -83,13 +86,14 @@ Or for development, set `nwscriptLsp.serverPath` in VS Code settings to point to
 
 ## Roadmap
 
-- [ ] Cross-file symbol resolution (follow `#include` graph)
-- [ ] Workspace-wide indexing
-- [ ] Signature help
+- [x] Cross-file symbol resolution (follow `#include` graph)
+- [x] Workspace-wide indexing (scans all .nss files on startup)
+- [x] Signature help (parameter hints on `(` and `,`)
+- [x] Read `nasher.cfg` for include paths
 - [ ] Find references / rename
-- [ ] Read `nasher.cfg` for include paths
 - [ ] Semantic tokens (syntax highlighting from AST)
 - [ ] Code actions (auto-import, unused variable removal)
+- [ ] Local variable completion (variables within current function scope)
 
 ## License
 

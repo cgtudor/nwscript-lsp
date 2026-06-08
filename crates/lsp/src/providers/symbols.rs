@@ -1,4 +1,4 @@
-use nwscript_parser::{Declaration, FunctionDecl, Ident, LineIndex, StructDecl, TypeKind, VarDecl};
+use nwscript_parser::{Declaration, FunctionDecl, LineIndex, StructDecl, TypeKind, VarDecl};
 use tower_lsp::lsp_types::{DocumentSymbol, Position, Range, SymbolKind};
 
 /// Extract document symbols from a parsed file.
