@@ -26,34 +26,35 @@ pub async fn compile_file(
     // Suppress info logging
     cmd.arg("--quiet");
 
-    // Strategy: write the current source to an isolated temp directory and
-    // compile with --dirs pointing at the nasher cache. Using a unique temp
-    // dir per compilation ensures no stale .nss files pollute the resman.
-    let (compile_path, _temp_dir) = if let Some(cache_dir) = nasher_cache {
-        // Create a unique temp directory (only this file lives there)
-        let unique_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let temp_dir = std::env::temp_dir().join(format!("nwscript-lsp-{unique_id}"));
-        if std::fs::create_dir_all(&temp_dir).is_err() {
-            return Vec::new();
+    // Strategy: write current source into the nasher cache directory and compile
+    // from there. The compiler resolves includes from the compiled file's
+    // directory, so being IN the cache ensures --dirs + file-dir have the same
+    // files, matching how nasher itself compiles. The original is backed up and
+    // restored after compilation.
+    let (compile_path, backup) = if let Some(cache_dir) = nasher_cache {
+        let file_name = file_path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("temp.nss"));
+        let cache_file = cache_dir.join(file_name);
+
+        // Backup the existing cache copy (if any)
+        let backup_path = cache_dir.join(format!("{}.lsp-bak", file_name.to_string_lossy()));
+        let had_original = cache_file.exists();
+        if had_original {
+            let _ = std::fs::copy(&cache_file, &backup_path);
         }
-        let temp_file = temp_dir.join(
-            file_path
-                .file_name()
-                .unwrap_or_else(|| std::ffi::OsStr::new("temp.nss")),
-        );
-        if std::fs::write(&temp_file, source).is_err() {
-            let _ = std::fs::remove_dir_all(&temp_dir);
+
+        // Write current (possibly modified) source into cache
+        if std::fs::write(&cache_file, source).is_err() {
+            if had_original {
+                let _ = std::fs::rename(&backup_path, &cache_file);
+            }
             return Vec::new();
         }
 
-        tracing::debug!("compiling temp file {} with cache {}", temp_file.display(), cache_dir.display());
         cmd.arg("--dirs").arg(cache_dir);
-        (temp_file, Some(temp_dir))
+        (cache_file, Some((backup_path, had_original)))
     } else {
-        tracing::debug!("no nasher cache found, using fallback dirs");
         // No nasher cache: fall back to passing extra dirs
         if !extra_dirs.is_empty() {
             let dirs_str = extra_dirs
@@ -88,9 +89,15 @@ pub async fn compile_file(
 
     tracing::debug!("compiler output: {combined}");
 
-    // Clean up temp dir
-    if let Some(ref temp_dir) = _temp_dir {
-        let _ = std::fs::remove_dir_all(temp_dir);
+    // Restore the original cache file
+    if let Some((backup_path, had_original)) = backup {
+        if had_original {
+            let _ = std::fs::rename(&backup_path, &compile_path);
+        } else {
+            // File didn't exist before — remove our copy and the backup
+            let _ = std::fs::remove_file(&compile_path);
+            let _ = std::fs::remove_file(&backup_path);
+        }
     }
 
     parse_compiler_output(&combined)
