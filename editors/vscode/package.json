@@ -1,0 +1,67 @@
+{
+  "name": "nwscript-lsp",
+  "displayName": "NWScript Language Server",
+  "description": "Language server for NWScript (Neverwinter Nights scripting language)",
+  "version": "0.1.0",
+  "publisher": "tdn",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:nwscript"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "nwscript",
+        "aliases": [
+          "NWScript",
+          "nwscript"
+        ],
+        "extensions": [
+          ".nss"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "title": "NWScript Language Server",
+      "properties": {
+        "nwscriptLsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the nwscript-lsp server binary. If empty, uses the bundled binary."
+        },
+        "nwscriptLsp.compilerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to nwn_script_comp binary. If empty, uses the bundled binary."
+        },
+        "nwscriptLsp.includeDirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional include directories for NWScript compilation."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  }
+}

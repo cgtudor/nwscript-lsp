@@ -1,0 +1,30 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# Cargo lock is checked in for binaries
+# Cargo.lock
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# VS Code extension build output
+editors/vscode/out/
+editors/vscode/node_modules/
+editors/vscode/*.vsix
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log
