@@ -94,6 +94,12 @@ impl WorkspaceIndex {
             collect_nss_files(dir, &mut nss_files);
         }
 
+        // Also find nwscript.nss specifically (the engine built-in definitions).
+        // It may live in a docs/ or reference directory that we normally skip.
+        for dir in &self.source_dirs {
+            find_file_recursive(dir, "nwscript.nss", &mut nss_files);
+        }
+
         tracing::info!("indexing {} .nss files", nss_files.len());
 
         for path in nss_files {
@@ -166,12 +172,18 @@ impl WorkspaceIndex {
             .map(|r| r.value().clone())
     }
 
-    /// Get all symbols visible from a file (own symbols + transitive includes).
+    /// Get all symbols visible from a file (own symbols + transitive includes + implicit nwscript.nss).
     pub fn visible_symbols(&self, uri: &Url) -> Vec<SymbolInfo> {
         let uri = normalize_uri(uri);
         let mut visited = HashSet::new();
         let mut symbols = Vec::new();
         self.collect_symbols_recursive(&uri, &mut visited, &mut symbols);
+
+        // nwscript.nss is implicitly included by every file (engine built-in).
+        if let Some(nwscript_uri) = self.resolve_include("nwscript") {
+            self.collect_symbols_recursive(&nwscript_uri, &mut visited, &mut symbols);
+        }
+
         symbols
     }
 
@@ -395,6 +407,35 @@ fn find_leading_comment(source: &str, span: nwscript_parser::Span) -> Option<Str
 // File discovery
 // =============================================================================
 
+/// Directories to skip when scanning for .nss files.
+fn should_skip_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || name == "docs"
+        || name == "nwn_source"
+        || name == "node_modules"
+        || name == "target"
+}
+
+/// Search recursively for a specific file, ignoring skip rules.
+fn find_file_recursive(dir: &Path, target: &str, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            find_file_recursive(&path, target, out);
+        } else if path
+            .file_name()
+            .is_some_and(|n| n.eq_ignore_ascii_case(target))
+        {
+            if !out.contains(&path) {
+                out.push(path);
+            }
+        }
+    }
+}
+
 fn collect_nss_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -403,6 +444,10 @@ fn collect_nss_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if should_skip_dir(name) {
+                continue;
+            }
             collect_nss_files(&path, out);
         } else if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("nss")) {
             out.push(path);

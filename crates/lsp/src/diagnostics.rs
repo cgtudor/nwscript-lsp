@@ -73,9 +73,13 @@ fn collect_dirs_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            // Skip .nasher cache directories
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with('.') {
+            if name.starts_with('.')
+                || name == "docs"
+                || name == "nwn_source"
+                || name == "node_modules"
+                || name == "target"
+            {
                 continue;
             }
             collect_dirs_recursive(&path, out);
@@ -138,14 +142,26 @@ fn parse_compiler_line(line: &str) -> Option<Diagnostic> {
     // Extract the message after "ERROR: " or "WARNING: "
     let after_marker = &line[msg_area_start + marker_len..].trim();
     // Strip trailing [Nms] timing info
-    let message = after_marker
+    let raw_message = after_marker
         .rfind(" [")
         .map(|i| &after_marker[..i])
         .unwrap_or(after_marker)
-        .to_string();
+        .trim();
 
-    // Try to extract line number from filename(LINE) pattern
-    let line_num = extract_line_number(line).unwrap_or(1);
+    // Skip empty or unhelpful messages
+    if raw_message.is_empty() {
+        return None;
+    }
+
+    // Extract line number and source file info
+    let (line_num, source_file) = extract_location_info(line);
+    let line_num = line_num.unwrap_or(1);
+
+    // Build a clearer message, including source file if it differs from the main file
+    let message = match source_file {
+        Some(src) => format!("{raw_message} (in {src}:{line_num})"),
+        None => format!("{raw_message} (line {line_num})"),
+    };
 
     Some(Diagnostic {
         range: Range::new(
@@ -159,12 +175,11 @@ fn parse_compiler_line(line: &str) -> Option<Diagnostic> {
     })
 }
 
-fn extract_line_number(line: &str) -> Option<u32> {
-    // Look for filename(LINE) pattern
-    // The pattern appears after the source file reference
-    // e.g., "test_err.nss(1): ERROR: ..."
-    let mut i = 0;
+/// Extract (line_number, source_filename) from compiler output.
+/// Format: `... filename.nss(LINE): ERROR: ...`
+fn extract_location_info(line: &str) -> (Option<u32>, Option<String>) {
     let bytes = line.as_bytes();
+    let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'(' {
             let start = i + 1;
@@ -174,14 +189,20 @@ fn extract_line_number(line: &str) -> Option<u32> {
             }
             if end > start && end < bytes.len() && bytes[end] == b')' {
                 if let Ok(n) = line[start..end].parse::<u32>() {
-                    // Verify this is followed by ): (the error separator)
                     if end + 1 < bytes.len() && bytes[end + 1] == b':' {
-                        return Some(n);
+                        // Extract filename before the (LINE)
+                        let before = &line[..i];
+                        let filename = before
+                            .rsplit(|c: char| c == ' ' || c == ':' || c == '/' || c == '\\')
+                            .next()
+                            .filter(|s| s.ends_with(".nss"))
+                            .map(|s| s.to_string());
+                        return (Some(n), filename);
                     }
                 }
             }
         }
         i += 1;
     }
-    None
+    (None, None)
 }
