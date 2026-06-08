@@ -29,6 +29,13 @@
         "configuration": "./language-configuration.json"
       }
     ],
+    "grammars": [
+      {
+        "language": "nwscript",
+        "scopeName": "source.nwscript",
+        "path": "./syntaxes/nwscript.tmLanguage.json"
+      }
+    ],
     "configuration": {
       "title": "NWScript Language Server",
       "properties": {
@@ -61,6 +68,7 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
+    "@types/node": "^25.9.2",
     "@types/vscode": "^1.75.0",
     "typescript": "^5.0.0"
   }

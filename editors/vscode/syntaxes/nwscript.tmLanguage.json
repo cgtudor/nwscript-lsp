@@ -1,0 +1,178 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "NWScript",
+  "scopeName": "source.nwscript",
+  "fileTypes": ["nss"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#preprocessor" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#struct-definition" },
+    { "include": "#function-definition" },
+    { "include": "#function-call" },
+    { "include": "#operators" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.nwscript",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.nwscript",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "preprocessor": {
+      "patterns": [
+        {
+          "name": "meta.preprocessor.include.nwscript",
+          "match": "^\\s*(#\\s*include)\\s+(\"[^\"]*\")",
+          "captures": {
+            "1": { "name": "keyword.control.directive.include.nwscript" },
+            "2": { "name": "string.quoted.double.include.nwscript" }
+          }
+        },
+        {
+          "name": "keyword.control.directive.nwscript",
+          "match": "#\\s*\\w+"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.raw.nwscript",
+          "match": "r\"[^\"]*\""
+        },
+        {
+          "name": "string.quoted.double.hash.nwscript",
+          "match": "h\"[^\"]*\""
+        },
+        {
+          "name": "string.quoted.double.nwscript",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.nwscript",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.nwscript",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.nwscript",
+          "match": "\\b[0-9]*\\.[0-9]+[fF]?\\b|\\b[0-9]+\\.[0-9]*[fF]?\\b|\\b[0-9]+[fF]\\b"
+        },
+        {
+          "name": "constant.numeric.integer.nwscript",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.nwscript",
+          "match": "\\b(if|else|while|for|do|switch|case|default|break|continue|return)\\b"
+        },
+        {
+          "name": "storage.modifier.nwscript",
+          "match": "\\b(const)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.nwscript",
+          "match": "\\b(void|int|float|string|object|vector|action|effect|event|itemproperty|location|talent|json|sqlquery|cassowary)\\b"
+        },
+        {
+          "name": "storage.type.struct.nwscript",
+          "match": "\\b(struct)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.nwscript",
+          "match": "\\b(TRUE|FALSE|OBJECT_SELF|OBJECT_INVALID)\\b"
+        },
+        {
+          "name": "constant.language.nwscript",
+          "match": "\\b[A-Z][A-Z0-9_]{2,}\\b"
+        }
+      ]
+    },
+    "struct-definition": {
+      "match": "\\b(struct)\\s+([a-zA-Z_]\\w*)",
+      "captures": {
+        "1": { "name": "storage.type.struct.nwscript" },
+        "2": { "name": "entity.name.type.struct.nwscript" }
+      }
+    },
+    "function-definition": {
+      "match": "\\b(void|int|float|string|object|vector|action|effect|event|itemproperty|location|talent|json|sqlquery|cassowary|struct\\s+\\w+)\\s+([a-zA-Z_]\\w*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "storage.type.nwscript" },
+        "2": { "name": "entity.name.function.nwscript" }
+      }
+    },
+    "function-call": {
+      "match": "\\b([a-zA-Z_]\\w*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.nwscript" }
+      }
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.nwscript",
+          "match": "(\\+=|-=|\\*=|/=|%=|=)"
+        },
+        {
+          "name": "keyword.operator.comparison.nwscript",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.logical.nwscript",
+          "match": "(&&|\\|\\||!)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.nwscript",
+          "match": "(\\+\\+|--|\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.bitwise.nwscript",
+          "match": "(<<|>>|&|\\||\\^|~)"
+        },
+        {
+          "name": "keyword.operator.ternary.nwscript",
+          "match": "(\\?|:)"
+        }
+      ]
+    },
+    "identifiers": {
+      "match": "\\b[a-zA-Z_]\\w*\\b",
+      "name": "variable.other.nwscript"
+    }
+  }
+}

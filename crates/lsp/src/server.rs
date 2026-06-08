@@ -114,19 +114,15 @@ impl NwscriptLanguageServer {
         let (compiler_path, include_dirs) = {
             let config = self.config.read().unwrap();
             let compiler_path = match &config.compiler_path {
-                Some(p) => PathBuf::from(p),
-                None => {
-                    if let Ok(exe) = std::env::current_exe() {
-                        let dir = exe.parent().unwrap_or(exe.as_ref());
-                        let bundled = dir.join("nwn_script_comp.exe");
-                        if bundled.exists() {
-                            bundled
+                Some(p) if !p.is_empty() => PathBuf::from(p),
+                _ => {
+                    find_bundled_compiler().unwrap_or_else(|| {
+                        if cfg!(windows) {
+                            PathBuf::from("nwn_script_comp.exe")
                         } else {
                             PathBuf::from("nwn_script_comp")
                         }
-                    } else {
-                        PathBuf::from("nwn_script_comp")
-                    }
+                    })
                 }
             };
             let include_dirs: Vec<PathBuf> = config
@@ -385,4 +381,24 @@ impl LanguageServer for NwscriptLanguageServer {
 
         Ok(help.flatten())
     }
+}
+
+/// Search for the bundled `nwn_script_comp` binary next to our own executable.
+fn find_bundled_compiler() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+
+    // Try with .exe (Windows)
+    let with_exe = dir.join("nwn_script_comp.exe");
+    if with_exe.exists() {
+        return Some(with_exe);
+    }
+
+    // Try without extension (Linux/macOS)
+    let without = dir.join("nwn_script_comp");
+    if without.exists() {
+        return Some(without);
+    }
+
+    None
 }

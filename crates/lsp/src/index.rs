@@ -6,11 +6,23 @@ use dashmap::DashMap;
 use nwscript_parser::{Declaration, LineIndex, ParsedFile};
 use tower_lsp::lsp_types::Url;
 
+/// Normalize a URI for consistent lookups.
+/// On Windows, VS Code sends `file:///c:/...` (lowercase drive) while
+/// `Url::from_file_path` produces `file:///C:/...` (uppercase). Roundtrip
+/// through file path to canonicalize.
+pub fn normalize_uri(uri: &Url) -> Url {
+    if let Ok(path) = uri.to_file_path() {
+        Url::from_file_path(&path).unwrap_or_else(|_| uri.clone())
+    } else {
+        uri.clone()
+    }
+}
+
 /// Workspace-wide index of all NWScript files and their symbols.
 pub struct WorkspaceIndex {
-    /// All indexed files keyed by URI.
+    /// All indexed files keyed by normalized URI.
     files: DashMap<Url, Arc<IndexedFile>>,
-    /// Map from include name (e.g., "nwnx_player") to file URI.
+    /// Map from include name (e.g., "nwnx_player") to normalized file URI.
     include_map: DashMap<String, Url>,
     /// Source directories to search for files.
     source_dirs: Vec<PathBuf>,
@@ -107,6 +119,7 @@ impl WorkspaceIndex {
 
     /// Index a file with known source text (used for open documents).
     pub fn index_file_with_source(&self, uri: Url, path: PathBuf, source: String) {
+        let uri = normalize_uri(&uri);
         let line_index = LineIndex::new(&source);
         let parsed = nwscript_parser::parse(&source);
 
@@ -142,7 +155,8 @@ impl WorkspaceIndex {
 
     /// Get an indexed file by URI.
     pub fn get_file(&self, uri: &Url) -> Option<Arc<IndexedFile>> {
-        self.files.get(uri).map(|f| Arc::clone(f.value()))
+        let uri = normalize_uri(uri);
+        self.files.get(&uri).map(|f| Arc::clone(f.value()))
     }
 
     /// Resolve an include name to a URI.
@@ -154,9 +168,10 @@ impl WorkspaceIndex {
 
     /// Get all symbols visible from a file (own symbols + transitive includes).
     pub fn visible_symbols(&self, uri: &Url) -> Vec<SymbolInfo> {
+        let uri = normalize_uri(uri);
         let mut visited = HashSet::new();
         let mut symbols = Vec::new();
-        self.collect_symbols_recursive(uri, &mut visited, &mut symbols);
+        self.collect_symbols_recursive(&uri, &mut visited, &mut symbols);
         symbols
     }
 
