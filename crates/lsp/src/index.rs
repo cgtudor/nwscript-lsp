@@ -58,6 +58,10 @@ pub struct SymbolInfo {
     pub params: Option<Vec<ParamInfo>>,
     /// For functions: return type display string.
     pub return_type: Option<String>,
+    /// True if this is a function definition (has body), false for prototypes.
+    pub is_definition: bool,
+    /// The include name for auto-import (file stem without extension).
+    pub include_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -129,8 +133,13 @@ impl WorkspaceIndex {
         let line_index = LineIndex::new(&source);
         let parsed = nwscript_parser::parse(&source);
 
+        let include_name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
         let includes = extract_includes(&parsed);
-        let symbols = extract_symbols(&parsed, &uri, &source);
+        let symbols = extract_symbols(&parsed, &uri, &source, &include_name);
 
         // Register include mapping: stem name -> URI
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
@@ -227,6 +236,49 @@ impl WorkspaceIndex {
         best
     }
 
+    /// Get ALL symbols from all indexed files (for auto-import completion).
+    pub fn all_workspace_symbols(&self) -> Vec<SymbolInfo> {
+        let mut symbols = Vec::new();
+        for entry in self.files.iter() {
+            symbols.extend(entry.value().symbols.iter().cloned());
+        }
+        symbols
+    }
+
+    /// Check if a file (by include name) is in the transitive include tree of `uri`.
+    pub fn is_in_include_tree(&self, uri: &Url, include_name: &str) -> bool {
+        let uri = normalize_uri(uri);
+        let mut visited = HashSet::new();
+        self.check_include_tree(&uri, include_name, &mut visited)
+    }
+
+    fn check_include_tree(&self, uri: &Url, target: &str, visited: &mut HashSet<Url>) -> bool {
+        if !visited.insert(uri.clone()) {
+            return false;
+        }
+        let Some(file) = self.get_file(uri) else {
+            return false;
+        };
+        // Check if this file's stem matches
+        if let Some(stem) = file.path.file_stem().and_then(|s| s.to_str()) {
+            if stem.eq_ignore_ascii_case(target) {
+                return true;
+            }
+        }
+        // Check includes
+        for inc in &file.includes {
+            if inc.eq_ignore_ascii_case(target) {
+                return true;
+            }
+            if let Some(inc_uri) = self.resolve_include(inc) {
+                if self.check_include_tree(&inc_uri, target, visited) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Get all files in the index.
     pub fn all_files(&self) -> Vec<Url> {
         self.files.iter().map(|r| r.key().clone()).collect()
@@ -248,7 +300,7 @@ fn extract_includes(parsed: &ParsedFile) -> Vec<String> {
         .collect()
 }
 
-fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str) -> Vec<SymbolInfo> {
+fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str, include_name: &str) -> Vec<SymbolInfo> {
     let mut symbols = Vec::new();
 
     for decl in &parsed.declarations {
@@ -291,6 +343,8 @@ fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str) -> Vec<SymbolIn
                         doc,
                         params: Some(params),
                         return_type: Some(ret_ty),
+                        is_definition: !f.is_prototype(),
+                        include_name: include_name.to_string(),
                     });
                 }
             }
@@ -320,6 +374,8 @@ fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str) -> Vec<SymbolIn
                         doc: find_leading_comment(source, s.span),
                         params: None,
                         return_type: None,
+                        is_definition: true,
+                        include_name: include_name.to_string(),
                     });
 
                     // Also index struct fields for field access completion
@@ -340,6 +396,8 @@ fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str) -> Vec<SymbolIn
                                 doc: None,
                                 params: None,
                                 return_type: None,
+                                is_definition: true,
+                                include_name: include_name.to_string(),
                             });
                         }
                     }
@@ -366,6 +424,8 @@ fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str) -> Vec<SymbolIn
                         doc: find_leading_comment(source, v.span),
                         params: None,
                         return_type: None,
+                        is_definition: true,
+                        include_name: include_name.to_string(),
                     });
                 }
             }

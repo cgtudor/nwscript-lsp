@@ -156,6 +156,17 @@ impl NwscriptLanguageServer {
             diagnostics.extend(compiler.value().iter().cloned());
         }
 
+        // Unused import diagnostics (grayed out with Unnecessary tag)
+        {
+            let guard = self.index.read().unwrap();
+            if let Some(index) = guard.as_ref() {
+                let analysis = providers::actions::analyze_imports(
+                    index, uri, &doc.parsed, &doc.source, &doc.line_index,
+                );
+                diagnostics.extend(analysis.diagnostics);
+            }
+        }
+
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, Some(doc.version))
             .await;
@@ -280,6 +291,7 @@ impl LanguageServer for NwscriptLanguageServer {
                     retrigger_characters: None,
                     work_done_progress_options: Default::default(),
                 }),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 ..Default::default()
             },
         })
@@ -341,28 +353,25 @@ impl LanguageServer for NwscriptLanguageServer {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = &params.text_document_position.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(Some(CompletionResponse::Array(
+                providers::completion::keyword_completions(),
+            )));
+        };
 
-        let items = self.with_index(|index| {
-            let symbols = index.visible_symbols(uri);
-            let mut items = providers::completion::completions_from_symbols(&symbols);
-            items.extend(providers::completion::keyword_completions());
-            items
-        });
-
-        match items {
-            Some(items) => Ok(Some(CompletionResponse::Array(items))),
-            None => {
-                // Fallback: use just the current document
-                let doc = self.documents.get(uri);
-                if doc.is_some() {
-                    Ok(Some(CompletionResponse::Array(
-                        providers::completion::keyword_completions(),
-                    )))
-                } else {
-                    Ok(None)
-                }
+        let guard = self.index.read().unwrap();
+        let items = match guard.as_ref() {
+            Some(index) => {
+                let mut items = providers::completion::completions_from_index(
+                    index, uri, &doc.parsed, &doc.line_index,
+                );
+                items.extend(providers::completion::keyword_completions());
+                items
             }
-        }
+            None => providers::completion::keyword_completions(),
+        };
+
+        Ok(Some(CompletionResponse::Array(items)))
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -447,6 +456,30 @@ impl LanguageServer for NwscriptLanguageServer {
         });
 
         Ok(help.flatten())
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = &params.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let guard = self.index.read().unwrap();
+        let actions = match guard.as_ref() {
+            Some(index) => {
+                let analysis = providers::actions::analyze_imports(
+                    index, uri, &doc.parsed, &doc.source, &doc.line_index,
+                );
+                analysis
+                    .actions
+                    .into_iter()
+                    .map(CodeActionOrCommand::CodeAction)
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+
+        Ok(Some(actions))
     }
 }
 

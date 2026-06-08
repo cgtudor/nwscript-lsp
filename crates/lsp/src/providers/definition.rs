@@ -5,6 +5,7 @@ use tower_lsp::lsp_types::{Location, Position, Url};
 use super::symbols::span_to_range;
 
 /// Find the definition of the symbol at the given position, searching across files.
+/// Prefers implementations (functions with bodies) over forward declarations.
 pub fn goto_definition(
     index: &WorkspaceIndex,
     source: &str,
@@ -18,17 +19,15 @@ pub fn goto_definition(
     // Search visible symbols (own file + transitive includes)
     let symbols = index.visible_symbols(uri);
 
-    // Prefer function definitions over prototypes
+    // Prefer implementations over prototypes
     let mut best: Option<&SymbolInfo> = None;
     for sym in &symbols {
         if sym.name == target_name {
             match best {
                 None => best = Some(sym),
                 Some(prev) => {
-                    // Prefer definitions (longer detail = has body)
-                    if prev.detail.ends_with(" {...}") || !sym.detail.ends_with(" {...}") {
-                        // Keep prev if it's already a definition
-                    } else {
+                    // Always prefer a definition over a prototype
+                    if !prev.is_definition && sym.is_definition {
                         best = Some(sym);
                     }
                 }
@@ -38,7 +37,6 @@ pub fn goto_definition(
 
     let sym = best?;
 
-    // Need the target file's line index to convert spans
     let target_file = index.get_file(&sym.uri)?;
     let range = span_to_range(sym.span, &target_file.line_index);
 
