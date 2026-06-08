@@ -100,7 +100,20 @@ pub async fn compile_file(
         }
     }
 
-    parse_compiler_output(&combined)
+    let mut diags = parse_compiler_output(&combined);
+
+    // Adjust diagnostic ranges: use actual content start column instead of 0
+    let lines: Vec<&str> = source.lines().collect();
+    for diag in &mut diags {
+        let line_idx = diag.range.start.line as usize;
+        if let Some(line_text) = lines.get(line_idx) {
+            let indent = line_text.len() - line_text.trim_start().len();
+            diag.range.start.character = indent as u32;
+            diag.range.end.character = line_text.len() as u32;
+        }
+    }
+
+    diags
 }
 
 /// Find the nasher cache directory for a workspace.
