@@ -12,6 +12,8 @@ pub struct Parser<'src> {
     /// Index into `tokens`, pointing at the next non-trivia token.
     pos: usize,
     errors: Vec<ParseError>,
+    /// Extra statements produced by comma-separated var declarations.
+    pending_stmts: Vec<Stmt>,
 }
 
 impl<'src> Parser<'src> {
@@ -21,6 +23,7 @@ impl<'src> Parser<'src> {
             tokens,
             pos: 0,
             errors: Vec::new(),
+            pending_stmts: Vec::new(),
         };
 
         // Advance past any leading trivia.
@@ -328,6 +331,8 @@ impl<'src> Parser<'src> {
         while !self.at(TokenKind::RBrace) && !self.at_end() {
             if let Some(stmt) = self.parse_stmt() {
                 stmts.push(stmt);
+                // Drain any extra stmts from comma-separated var decls
+                stmts.append(&mut self.pending_stmts);
             }
         }
 
@@ -376,7 +381,15 @@ impl<'src> Parser<'src> {
                     // Could be var decl or expression (e.g., `object` could be a type).
                     // Look ahead: type followed by ident is a var decl.
                     if self.is_var_decl_lookahead() {
-                        return Some(Stmt::VarDecl(self.parse_local_var()));
+                        // Comma-separated: `int a, b = 5;` → multiple VarDecl stmts
+                        let decls = self.parse_local_var_list();
+                        // Return first; push rest into pending_stmts
+                        let mut iter = decls.into_iter();
+                        let first = iter.next().unwrap();
+                        for extra in iter {
+                            self.pending_stmts.push(Stmt::VarDecl(extra));
+                        }
+                        return Some(Stmt::VarDecl(first));
                     }
                 }
 
@@ -405,27 +418,54 @@ impl<'src> Parser<'src> {
             && self.peek_kind(2) != Some(TokenKind::LParen)
     }
 
-    fn parse_local_var(&mut self) -> VarDecl {
+    /// Parse a local variable declaration, possibly comma-separated.
+    /// `int a, b = 5, c;` produces multiple VarDecl nodes.
+    fn parse_local_var_list(&mut self) -> Vec<VarDecl> {
         let start = self.current().span;
         let ty = self.parse_type().unwrap_or(TypeRef {
             span: self.current().span,
             kind: TypeKind::Error,
         });
+
+        let mut decls = Vec::new();
+
+        // First variable
         let name = self.parse_ident();
         let initializer = if self.eat(TokenKind::Eq) {
             Some(self.parse_expr())
         } else {
             None
         };
-        self.expect(TokenKind::Semi);
         let end = self.prev_span();
-        VarDecl {
+        decls.push(VarDecl {
             span: start.merge(end),
             is_const: false,
-            ty,
+            ty: ty.clone(),
             name,
             initializer,
+        });
+
+        // Additional comma-separated variables
+        while self.eat(TokenKind::Comma) {
+            let var_start = self.current().span;
+            let name = self.parse_ident();
+            let initializer = if self.eat(TokenKind::Eq) {
+                Some(self.parse_expr())
+            } else {
+                None
+            };
+            let var_end = self.prev_span();
+            decls.push(VarDecl {
+                span: var_start.merge(var_end),
+                is_const: false,
+                ty: ty.clone(),
+                name,
+                initializer,
+            });
         }
+
+        self.expect(TokenKind::Semi);
+        decls
     }
 
     fn parse_if(&mut self) -> IfStmt {
@@ -500,7 +540,9 @@ impl<'src> Parser<'src> {
             self.advance();
             None
         } else if self.at_type_start() && self.is_var_decl_lookahead() {
-            Some(Box::new(Stmt::VarDecl(self.parse_local_var())))
+            let decls = self.parse_local_var_list();
+            let first = decls.into_iter().next().unwrap();
+            Some(Box::new(Stmt::VarDecl(first)))
         } else {
             let expr = self.parse_expr();
             let sp = expr.span();
@@ -933,7 +975,7 @@ impl<'src> Parser<'src> {
             }
             _ => {
                 let span = tok.span;
-                self.error_at(span, format!("expected expression, found `{}`", tok.text(self.source)));
+                self.error_at(span, format!("expected expression, found `{}`", tok.text(self.source).chars().take(20).collect::<String>()));
                 self.advance();
                 Expr::Error(span)
             }
@@ -1033,7 +1075,14 @@ impl<'src> Parser<'src> {
 
     fn expect(&mut self, kind: TokenKind) {
         if !self.eat(kind) {
-            self.error(&format!("expected `{kind:?}`"));
+            let expected = token_display(kind);
+            let found = self.current();
+            let found_text = if found.kind == TokenKind::Eof {
+                "end of file".to_string()
+            } else {
+                format!("`{}`", found.text(self.source))
+            };
+            self.error(&format!("expected {expected}, found {found_text}"));
         }
     }
 
@@ -1070,6 +1119,34 @@ impl<'src> Parser<'src> {
             }
             self.advance();
         }
+    }
+}
+
+/// Human-readable display for expected tokens in error messages.
+fn token_display(kind: TokenKind) -> &'static str {
+    match kind {
+        TokenKind::Semi => "`;`",
+        TokenKind::Comma => "`,`",
+        TokenKind::LParen => "`(`",
+        TokenKind::RParen => "`)`",
+        TokenKind::LBrace => "`{`",
+        TokenKind::RBrace => "`}`",
+        TokenKind::LBracket => "`[`",
+        TokenKind::RBracket => "`]`",
+        TokenKind::Colon => "`:`",
+        TokenKind::Dot => "`.`",
+        TokenKind::Eq => "`=`",
+        TokenKind::HashInclude => "`#include`",
+        TokenKind::KwIf => "`if`",
+        TokenKind::KwElse => "`else`",
+        TokenKind::KwWhile => "`while`",
+        TokenKind::KwFor => "`for`",
+        TokenKind::KwReturn => "`return`",
+        TokenKind::KwCase => "`case`",
+        TokenKind::KwDefault => "`default`",
+        TokenKind::KwStruct => "`struct`",
+        TokenKind::Ident => "identifier",
+        _ => "token",
     }
 }
 
@@ -1167,5 +1244,29 @@ mod tests {
         assert!(!file.errors.is_empty());
         // Should still produce some declarations
         assert_eq!(file.declarations.len(), 1);
+    }
+
+    #[test]
+    fn parse_comma_separated_vars() {
+        let file = parse("void main() { string sA, sB = \"x\", sC; }");
+        assert!(file.errors.is_empty(), "errors: {:?}", file.errors);
+        match &file.declarations[0] {
+            Declaration::Function(f) => {
+                let body = f.body.as_ref().unwrap();
+                // Should produce 3 separate VarDecl statements
+                assert_eq!(body.stmts.len(), 3, "stmts: {:#?}", body.stmts);
+                assert!(matches!(&body.stmts[0], Stmt::VarDecl(v) if v.name.as_ref().unwrap().name == "sA"));
+                assert!(matches!(&body.stmts[1], Stmt::VarDecl(v) if v.name.as_ref().unwrap().name == "sB"));
+                assert!(matches!(&body.stmts[2], Stmt::VarDecl(v) if v.name.as_ref().unwrap().name == "sC"));
+            }
+            other => panic!("expected Function, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_for_with_bare_init() {
+        // for (n; n < 10; n++) — bare ident as init
+        let file = parse("void main() { int n; for (n; n < 10; n++) { } }");
+        assert!(file.errors.is_empty(), "errors: {:?}", file.errors);
     }
 }
