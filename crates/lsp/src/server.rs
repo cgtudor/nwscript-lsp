@@ -23,6 +23,8 @@ pub struct NwscriptLanguageServer {
     documents: DocumentStore,
     index: RwLock<Option<WorkspaceIndex>>,
     config: RwLock<NwscriptConfig>,
+    /// All directories containing .nss files, for the compiler's --dirs flag.
+    nss_dirs: RwLock<Vec<PathBuf>>,
 }
 
 impl NwscriptLanguageServer {
@@ -32,6 +34,7 @@ impl NwscriptLanguageServer {
             documents: DocumentStore::new(),
             index: RwLock::new(None),
             config: RwLock::new(NwscriptConfig::default()),
+            nss_dirs: RwLock::new(Vec::new()),
         }
     }
 
@@ -57,6 +60,11 @@ impl NwscriptLanguageServer {
                 }
             }
         }
+
+        // Collect all directories containing .nss files for the compiler
+        let nss_dirs = crate::diagnostics::collect_nss_directories(&source_dirs);
+        tracing::info!("found {} directories containing .nss files", nss_dirs.len());
+        *self.nss_dirs.write().unwrap() = nss_dirs;
 
         let index = WorkspaceIndex::new(source_dirs);
         index.scan_workspace();
@@ -111,7 +119,7 @@ impl NwscriptLanguageServer {
 
     /// Run the external compiler for additional diagnostics.
     async fn run_compiler_diagnostics(&self, uri: &Url) {
-        let (compiler_path, include_dirs) = {
+        let (compiler_path, mut include_dirs) = {
             let config = self.config.read().unwrap();
             let compiler_path = match &config.compiler_path {
                 Some(p) if !p.is_empty() => PathBuf::from(p),
@@ -133,10 +141,27 @@ impl NwscriptLanguageServer {
             (compiler_path, include_dirs)
         };
 
+        // Add all workspace .nss directories for include resolution
+        {
+            let nss_dirs = self.nss_dirs.read().unwrap();
+            for dir in nss_dirs.iter() {
+                if !include_dirs.contains(dir) {
+                    include_dirs.push(dir.clone());
+                }
+            }
+        }
+
         let file_path = match uri.to_file_path() {
             Ok(p) => p,
             Err(_) => return,
         };
+
+        // Also ensure the file's own directory is included
+        if let Some(parent) = file_path.parent() {
+            if !include_dirs.contains(&parent.to_path_buf()) {
+                include_dirs.push(parent.to_path_buf());
+            }
+        }
 
         let diagnostics =
             crate::diagnostics::compile_file(&compiler_path, &file_path, &include_dirs).await;

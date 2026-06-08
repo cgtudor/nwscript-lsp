@@ -11,26 +11,38 @@ pub async fn compile_file(
 ) -> Vec<Diagnostic> {
     let mut cmd = Command::new(compiler_path);
 
-    // Add include directories as -I flags
-    for dir in include_dirs {
-        cmd.arg("-I").arg(dir);
+    // Simulate mode: compile but don't write output files
+    cmd.arg("-s");
+    // No entry point required (works for include files too)
+    cmd.arg("-n");
+    // Collect all errors, don't stop at first
+    cmd.arg("-E");
+    // Quiet: suppress info-level logging, only errors
+    cmd.arg("--quiet");
+
+    // Build comma-separated directories for --dirs
+    if !include_dirs.is_empty() {
+        let dirs_str = include_dirs
+            .iter()
+            .filter_map(|d| d.to_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        if !dirs_str.is_empty() {
+            cmd.arg("--dirs").arg(&dirs_str);
+        }
     }
 
     cmd.arg(file_path);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    tracing::debug!("running compiler: {:?}", cmd);
+
     let output = match cmd.output().await {
         Ok(o) => o,
         Err(e) => {
             tracing::warn!("failed to run compiler: {e}");
-            return vec![Diagnostic {
-                range: Range::new(Position::new(0, 0), Position::new(0, 0)),
-                severity: Some(DiagnosticSeverity::WARNING),
-                source: Some("nwscript-lsp".into()),
-                message: format!("Could not run compiler: {e}"),
-                ..Default::default()
-            }];
+            return Vec::new();
         }
     };
 
@@ -38,14 +50,50 @@ pub async fn compile_file(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}\n{stderr}");
 
+    tracing::debug!("compiler output: {combined}");
+
     parse_compiler_output(&combined)
+}
+
+/// Collect all directories containing .nss files under the given roots.
+pub fn collect_nss_directories(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for root in roots {
+        collect_dirs_recursive(root, &mut dirs);
+    }
+    dirs
+}
+
+fn collect_dirs_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    let mut has_nss = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // Skip .nasher cache directories
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('.') {
+                continue;
+            }
+            collect_dirs_recursive(&path, out);
+        } else if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("nss")) {
+            has_nss = true;
+        }
+    }
+
+    if has_nss && !out.contains(&dir.to_path_buf()) {
+        out.push(dir.to_path_buf());
+    }
 }
 
 /// Parse nwn_script_comp output into diagnostics.
 ///
-/// The compiler outputs errors/warnings in formats like:
-///   `filename.nss:42: Error: NSC6012: Undeclared identifier "foo".`
-///   `filename.nss(42): Error: ...`
+/// Output format:
+///   `F [...] filepath: filename(LINE): ERROR: MESSAGE [Nms]`
+///   `E [...] error message`
 fn parse_compiler_output(output: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
@@ -55,7 +103,6 @@ fn parse_compiler_output(output: &str) -> Vec<Diagnostic> {
             continue;
         }
 
-        // Try to parse error/warning lines.
         if let Some(diag) = parse_compiler_line(line) {
             diagnostics.push(diag);
         }
@@ -65,25 +112,40 @@ fn parse_compiler_output(output: &str) -> Vec<Diagnostic> {
 }
 
 fn parse_compiler_line(line: &str) -> Option<Diagnostic> {
-    // Formats:
-    //   file.nss:LINE: Error: MESSAGE
-    //   file.nss(LINE): Error: MESSAGE
-    //   file.nss:LINE:COL: Error: MESSAGE
-    //   Error: MESSAGE (no location)
+    // Format: `F/E [timestamp] path: file(LINE): ERROR: MESSAGE [Nms]`
+    // Or:     `F/E [timestamp] path: file(LINE): ERROR: NSCxxxx: MESSAGE [Nms]`
 
-    // Look for "Error:" or "Warning:" to determine severity
-    let (severity, msg_start) = if let Some(idx) = line.find("Error:") {
-        (DiagnosticSeverity::ERROR, idx + 6)
-    } else if let Some(idx) = line.find("Warning:") {
-        (DiagnosticSeverity::WARNING, idx + 8)
-    } else {
-        return None;
+    // Must start with F or E (fatal/error severity indicator)
+    let severity = match line.chars().next()? {
+        'F' => DiagnosticSeverity::ERROR,
+        'E' => DiagnosticSeverity::ERROR,
+        'W' => DiagnosticSeverity::WARNING,
+        _ => return None,
     };
 
-    let message = line[msg_start..].trim().to_string();
+    // Look for the ERROR: or WARNING: marker
+    let error_marker = if let Some(idx) = line.find("ERROR:") {
+        Some((idx, DiagnosticSeverity::ERROR, 6))
+    } else if let Some(idx) = line.find("WARNING:") {
+        Some((idx, DiagnosticSeverity::WARNING, 8))
+    } else {
+        None
+    };
 
-    // Try to extract line number
-    let line_num = extract_line_number(line).unwrap_or(0);
+    let (msg_area_start, sev, marker_len) = error_marker?;
+    let severity = sev;
+
+    // Extract the message after "ERROR: " or "WARNING: "
+    let after_marker = &line[msg_area_start + marker_len..].trim();
+    // Strip trailing [Nms] timing info
+    let message = after_marker
+        .rfind(" [")
+        .map(|i| &after_marker[..i])
+        .unwrap_or(after_marker)
+        .to_string();
+
+    // Try to extract line number from filename(LINE) pattern
+    let line_num = extract_line_number(line).unwrap_or(1);
 
     Some(Diagnostic {
         range: Range::new(
@@ -98,25 +160,28 @@ fn parse_compiler_line(line: &str) -> Option<Diagnostic> {
 }
 
 fn extract_line_number(line: &str) -> Option<u32> {
-    // Try `file:LINE:` format
-    if let Some(colon1) = line.find(':') {
-        let rest = &line[colon1 + 1..];
-        if let Some(colon2) = rest.find(':') {
-            if let Ok(n) = rest[..colon2].trim().parse::<u32>() {
-                return Some(n);
+    // Look for filename(LINE) pattern
+    // The pattern appears after the source file reference
+    // e.g., "test_err.nss(1): ERROR: ..."
+    let mut i = 0;
+    let bytes = line.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'(' {
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end > start && end < bytes.len() && bytes[end] == b')' {
+                if let Ok(n) = line[start..end].parse::<u32>() {
+                    // Verify this is followed by ): (the error separator)
+                    if end + 1 < bytes.len() && bytes[end + 1] == b':' {
+                        return Some(n);
+                    }
+                }
             }
         }
+        i += 1;
     }
-
-    // Try `file(LINE)` format
-    if let Some(paren) = line.find('(') {
-        let rest = &line[paren + 1..];
-        if let Some(close) = rest.find(')') {
-            if let Ok(n) = rest[..close].trim().parse::<u32>() {
-                return Some(n);
-            }
-        }
-    }
-
     None
 }
