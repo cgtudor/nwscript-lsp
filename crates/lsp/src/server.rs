@@ -98,7 +98,7 @@ impl NwscriptLanguageServer {
         tracing::info!("found {} directories containing .nss files", nss_dirs.len());
         *self.nss_dirs.write().unwrap() = nss_dirs;
 
-        let index = WorkspaceIndex::new(source_dirs);
+        let index = WorkspaceIndex::new(source_dirs, workspace_dirs.to_vec());
         index.scan_workspace();
 
         *self.index.write().unwrap() = Some(index);

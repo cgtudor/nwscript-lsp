@@ -26,6 +26,8 @@ pub struct WorkspaceIndex {
     include_map: DashMap<String, Url>,
     /// Source directories to search for files.
     source_dirs: Vec<PathBuf>,
+    /// Broader search roots (workspace dirs + source dir parents) for special files.
+    search_roots: Vec<PathBuf>,
 }
 
 /// A parsed and indexed .nss file.
@@ -82,11 +84,24 @@ pub enum SymbolKind {
 }
 
 impl WorkspaceIndex {
-    pub fn new(source_dirs: Vec<PathBuf>) -> Self {
+    pub fn new(source_dirs: Vec<PathBuf>, workspace_dirs: Vec<PathBuf>) -> Self {
+        // Collect all root dirs to search for special files like nwscript.nss.
+        // Includes workspace roots AND parents of source dirs.
+        let mut search_roots = workspace_dirs;
+        for src in &source_dirs {
+            if let Some(parent) = src.parent() {
+                let p = parent.to_path_buf();
+                if !search_roots.contains(&p) {
+                    search_roots.push(p);
+                }
+            }
+        }
+
         Self {
             files: DashMap::new(),
             include_map: DashMap::new(),
             source_dirs,
+            search_roots,
         }
     }
 
@@ -99,8 +114,8 @@ impl WorkspaceIndex {
         }
 
         // Also find nwscript.nss specifically (the engine built-in definitions).
-        // It may live in a docs/ or reference directory that we normally skip.
-        for dir in &self.source_dirs {
+        // It may live in a docs/ or reference directory outside source dirs.
+        for dir in &self.search_roots {
             find_file_recursive(dir, "nwscript.nss", &mut nss_files);
         }
 
