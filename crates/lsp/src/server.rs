@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::RwLock;
 
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -27,6 +28,8 @@ pub struct NwscriptLanguageServer {
     nasher_cache: RwLock<Option<PathBuf>>,
     /// Fallback: all directories containing .nss files.
     nss_dirs: RwLock<Vec<PathBuf>>,
+    /// Last compiler diagnostics per file (cleared on edit, updated on save).
+    compiler_diags: DashMap<Url, Vec<Diagnostic>>,
 }
 
 impl NwscriptLanguageServer {
@@ -38,6 +41,7 @@ impl NwscriptLanguageServer {
             config: RwLock::new(NwscriptConfig::default()),
             nasher_cache: RwLock::new(None),
             nss_dirs: RwLock::new(Vec::new()),
+            compiler_diags: DashMap::new(),
         }
     }
 
@@ -91,13 +95,14 @@ impl NwscriptLanguageServer {
         guard.as_ref().map(f)
     }
 
-    /// Publish diagnostics from our parser for a document.
-    async fn publish_parser_diagnostics(&self, uri: &Url) {
+    /// Publish combined parser + compiler diagnostics for a document.
+    /// Called on every edit (didChange). Clears stale compiler diagnostics.
+    async fn publish_diagnostics_for(&self, uri: &Url, clear_compiler: bool) {
         let Some(doc) = self.documents.get(uri) else {
             return;
         };
 
-        // Also update the workspace index with the latest source
+        // Update workspace index
         {
             let guard = self.index.read().unwrap();
             if let Some(index) = guard.as_ref() {
@@ -105,7 +110,8 @@ impl NwscriptLanguageServer {
             }
         }
 
-        let diagnostics: Vec<Diagnostic> = doc
+        // Parser diagnostics (always fresh from current source)
+        let mut diagnostics: Vec<Diagnostic> = doc
             .parsed
             .errors
             .iter()
@@ -122,12 +128,22 @@ impl NwscriptLanguageServer {
             })
             .collect();
 
+        // Clear stale compiler diagnostics when the user edits
+        if clear_compiler {
+            self.compiler_diags.remove(uri);
+        }
+
+        // Merge in any cached compiler diagnostics
+        if let Some(compiler) = self.compiler_diags.get(uri) {
+            diagnostics.extend(compiler.value().iter().cloned());
+        }
+
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, Some(doc.version))
             .await;
     }
 
-    /// Run the external compiler for additional diagnostics.
+    /// Run the external compiler and merge results with parser diagnostics.
     async fn run_compiler_diagnostics(&self, uri: &Url) {
         let compiler_path = {
             let config = self.config.read().unwrap();
@@ -150,7 +166,6 @@ impl NwscriptLanguageServer {
             Err(_) => return,
         };
 
-        // Get the current source text from the open document
         let source = match self.documents.get(uri) {
             Some(doc) => doc.source.clone(),
             None => match std::fs::read_to_string(&file_path) {
@@ -162,7 +177,7 @@ impl NwscriptLanguageServer {
         let nasher_cache = self.nasher_cache.read().unwrap().clone();
         let fallback_dirs = self.nss_dirs.read().unwrap().clone();
 
-        let diagnostics = crate::diagnostics::compile_file(
+        let compiler_diagnostics = crate::diagnostics::compile_file(
             &compiler_path,
             &file_path,
             &source,
@@ -171,11 +186,10 @@ impl NwscriptLanguageServer {
         )
         .await;
 
-        let doc = self.documents.get(uri);
-        let version = doc.as_ref().map(|d| d.version);
-        self.client
-            .publish_diagnostics(uri.clone(), diagnostics, version)
-            .await;
+        // Store compiler diagnostics and publish combined set
+        self.compiler_diags
+            .insert(uri.clone(), compiler_diagnostics);
+        self.publish_diagnostics_for(uri, false).await;
     }
 
     /// Get the source text at a given line up to the cursor position.
@@ -275,7 +289,7 @@ impl LanguageServer for NwscriptLanguageServer {
         let text = params.text_document.text;
 
         self.documents.open(uri.clone(), version, text);
-        self.publish_parser_diagnostics(&uri).await;
+        self.publish_diagnostics_for(&uri, false).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -284,7 +298,8 @@ impl LanguageServer for NwscriptLanguageServer {
 
         if let Some(change) = params.content_changes.into_iter().next() {
             self.documents.update(&uri, version, change.text);
-            self.publish_parser_diagnostics(&uri).await;
+            // Clear compiler diagnostics on edit — they'll refresh on next save
+            self.publish_diagnostics_for(&uri, true).await;
         }
     }
 
@@ -294,10 +309,16 @@ impl LanguageServer for NwscriptLanguageServer {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.documents.close(&params.text_document.uri);
+        let uri = params.text_document.uri;
+        self.documents.close(&uri);
+        self.compiler_diags.remove(&uri);
         self.client
-            .publish_diagnostics(params.text_document.uri, vec![], None)
+            .publish_diagnostics(uri, vec![], None)
             .await;
+    }
+
+    async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
+        // TODO: re-index changed files
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
