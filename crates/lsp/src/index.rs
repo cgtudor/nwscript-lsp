@@ -117,7 +117,7 @@ impl WorkspaceIndex {
 
     /// Index a single file from disk.
     fn index_file_from_disk(&self, path: &Path) -> Result<(), String> {
-        let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let source = read_file_lossy(path)?;
         let uri = Url::from_file_path(path).map_err(|_| "invalid path".to_string())?;
         self.index_file_with_source(uri, path.to_path_buf(), source);
         Ok(())
@@ -414,6 +414,21 @@ fn should_skip_dir(name: &str) -> bool {
         || name == "nwn_source"
         || name == "node_modules"
         || name == "target"
+}
+
+/// Read a file, trying UTF-8 first, falling back to Latin-1/Windows-1252.
+/// NWScript files from the BioWare era often use Windows-1252 encoding.
+fn read_file_lossy(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+
+    // Try UTF-8 first
+    match String::from_utf8(bytes.clone()) {
+        Ok(s) => Ok(s),
+        Err(_) => {
+            // Fall back to Latin-1 decoding (every byte is valid)
+            Ok(bytes.iter().map(|&b| b as char).collect())
+        }
+    }
 }
 
 /// Search recursively for a specific file, ignoring skip rules.

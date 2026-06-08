@@ -4,35 +4,63 @@ use tokio::process::Command;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 /// Runs `nwn_script_comp` on a file and parses the output into LSP diagnostics.
+///
+/// If a nasher cache directory is available, the file is written to a temp
+/// location and compiled using the cache as `--dirs`. This avoids duplicate
+/// function errors that occur when multiple source directories are passed.
 pub async fn compile_file(
     compiler_path: &Path,
     file_path: &Path,
-    include_dirs: &[PathBuf],
+    source: &str,
+    nasher_cache: &Option<PathBuf>,
+    extra_dirs: &[PathBuf],
 ) -> Vec<Diagnostic> {
     let mut cmd = Command::new(compiler_path);
 
-    // Simulate mode: compile but don't write output files
+    // Simulate: don't write output files
     cmd.arg("-s");
     // No entry point required (works for include files too)
     cmd.arg("-n");
-    // Collect all errors, don't stop at first
+    // Collect all errors
     cmd.arg("-E");
-    // Quiet: suppress info-level logging, only errors
+    // Suppress info logging
     cmd.arg("--quiet");
 
-    // Build comma-separated directories for --dirs
-    if !include_dirs.is_empty() {
-        let dirs_str = include_dirs
-            .iter()
-            .filter_map(|d| d.to_str())
-            .collect::<Vec<_>>()
-            .join(",");
-        if !dirs_str.is_empty() {
-            cmd.arg("--dirs").arg(&dirs_str);
+    // Determine the file to compile and the include dirs.
+    // Strategy: write the current source to a temp file and use the nasher
+    // cache (flat directory) as --dirs. This matches how nasher compiles
+    // and avoids duplicate function errors from multi-directory --dirs.
+    let (compile_path, _temp_dir) = if let Some(cache_dir) = nasher_cache {
+        // Write current source to a temp file
+        let temp_dir = std::env::temp_dir().join("nwscript-lsp");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let temp_file = temp_dir.join(
+            file_path
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("temp.nss")),
+        );
+        if std::fs::write(&temp_file, source).is_err() {
+            return Vec::new();
         }
-    }
 
-    cmd.arg(file_path);
+        cmd.arg("--dirs").arg(cache_dir);
+        (temp_file, Some(temp_dir))
+    } else {
+        // No nasher cache: fall back to passing extra dirs
+        if !extra_dirs.is_empty() {
+            let dirs_str = extra_dirs
+                .iter()
+                .filter_map(|d| d.to_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            if !dirs_str.is_empty() {
+                cmd.arg("--dirs").arg(&dirs_str);
+            }
+        }
+        (file_path.to_path_buf(), None)
+    };
+
+    cmd.arg(&compile_path);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -53,6 +81,70 @@ pub async fn compile_file(
     tracing::debug!("compiler output: {combined}");
 
     parse_compiler_output(&combined)
+}
+
+/// Find the nasher cache directory for a workspace.
+pub fn find_nasher_cache(workspace_dirs: &[PathBuf]) -> Option<PathBuf> {
+    for dir in workspace_dirs {
+        // Check direct nasher cache
+        let cache = dir.join(".nasher").join("cache");
+        if cache.is_dir() {
+            // Use the first target's cache
+            if let Ok(entries) = std::fs::read_dir(&cache) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        // Verify it contains .nss files
+                        let has_nss = std::fs::read_dir(&path)
+                            .map(|entries| {
+                                entries.flatten().any(|e| {
+                                    e.path()
+                                        .extension()
+                                        .is_some_and(|ext| ext.eq_ignore_ascii_case("nss"))
+                                })
+                            })
+                            .unwrap_or(false);
+                        if has_nss {
+                            return Some(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also check subdirectories (multi-repo workspace)
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let sub = entry.path();
+                if sub.is_dir() {
+                    let cache = sub.join(".nasher").join("cache");
+                    if cache.is_dir() {
+                        if let Ok(entries) = std::fs::read_dir(&cache) {
+                            for entry in entries.flatten() {
+                                let path = entry.path();
+                                if path.is_dir() {
+                                    let has_nss = std::fs::read_dir(&path)
+                                        .map(|entries| {
+                                            entries.flatten().any(|e| {
+                                                e.path().extension().is_some_and(|ext| {
+                                                    ext.eq_ignore_ascii_case("nss")
+                                                })
+                                            })
+                                        })
+                                        .unwrap_or(false);
+                                    if has_nss {
+                                        return Some(path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Collect all directories containing .nss files under the given roots.
@@ -94,10 +186,6 @@ fn collect_dirs_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// Parse nwn_script_comp output into diagnostics.
-///
-/// Output format:
-///   `F [...] filepath: filename(LINE): ERROR: MESSAGE [Nms]`
-///   `E [...] error message`
 fn parse_compiler_output(output: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
@@ -116,31 +204,24 @@ fn parse_compiler_output(output: &str) -> Vec<Diagnostic> {
 }
 
 fn parse_compiler_line(line: &str) -> Option<Diagnostic> {
-    // Format: `F/E [timestamp] path: file(LINE): ERROR: MESSAGE [Nms]`
-    // Or:     `F/E [timestamp] path: file(LINE): ERROR: NSCxxxx: MESSAGE [Nms]`
-
-    // Must start with F or E (fatal/error severity indicator)
+    // Must start with F or E (fatal/error) or W (warning)
     let severity = match line.chars().next()? {
-        'F' => DiagnosticSeverity::ERROR,
-        'E' => DiagnosticSeverity::ERROR,
+        'F' | 'E' => DiagnosticSeverity::ERROR,
         'W' => DiagnosticSeverity::WARNING,
         _ => return None,
     };
 
-    // Look for the ERROR: or WARNING: marker
-    let error_marker = if let Some(idx) = line.find("ERROR:") {
-        Some((idx, DiagnosticSeverity::ERROR, 6))
+    // Look for ERROR: or WARNING: marker
+    let (msg_start, severity, marker_len) = if let Some(idx) = line.find("ERROR:") {
+        (idx, DiagnosticSeverity::ERROR, 6)
     } else if let Some(idx) = line.find("WARNING:") {
-        Some((idx, DiagnosticSeverity::WARNING, 8))
+        (idx, DiagnosticSeverity::WARNING, 8)
     } else {
-        None
+        return None;
     };
 
-    let (msg_area_start, sev, marker_len) = error_marker?;
-    let severity = sev;
-
-    // Extract the message after "ERROR: " or "WARNING: "
-    let after_marker = &line[msg_area_start + marker_len..].trim();
+    // Extract message after marker
+    let after_marker = line[msg_start + marker_len..].trim();
     // Strip trailing [Nms] timing info
     let raw_message = after_marker
         .rfind(" [")
@@ -148,19 +229,18 @@ fn parse_compiler_line(line: &str) -> Option<Diagnostic> {
         .unwrap_or(after_marker)
         .trim();
 
-    // Skip empty or unhelpful messages
     if raw_message.is_empty() {
         return None;
     }
 
-    // Extract line number and source file info
+    // Extract line number and source file
     let (line_num, source_file) = extract_location_info(line);
     let line_num = line_num.unwrap_or(1);
 
-    // Build a clearer message, including source file if it differs from the main file
+    // Build message with context
     let message = match source_file {
         Some(src) => format!("{raw_message} (in {src}:{line_num})"),
-        None => format!("{raw_message} (line {line_num})"),
+        None => raw_message.to_string(),
     };
 
     Some(Diagnostic {
@@ -176,7 +256,6 @@ fn parse_compiler_line(line: &str) -> Option<Diagnostic> {
 }
 
 /// Extract (line_number, source_filename) from compiler output.
-/// Format: `... filename.nss(LINE): ERROR: ...`
 fn extract_location_info(line: &str) -> (Option<u32>, Option<String>) {
     let bytes = line.as_bytes();
     let mut i = 0;
@@ -190,7 +269,6 @@ fn extract_location_info(line: &str) -> (Option<u32>, Option<String>) {
             if end > start && end < bytes.len() && bytes[end] == b')' {
                 if let Ok(n) = line[start..end].parse::<u32>() {
                     if end + 1 < bytes.len() && bytes[end + 1] == b':' {
-                        // Extract filename before the (LINE)
                         let before = &line[..i];
                         let filename = before
                             .rsplit(|c: char| c == ' ' || c == ':' || c == '/' || c == '\\')
