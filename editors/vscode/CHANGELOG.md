@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0
+
+### New Features
+
+- **Document links** -- `#include "filename"` directives are now clickable (Ctrl+Click) to open the resolved file.
+- **Code lens** -- reference counts shown above function definitions and struct declarations (e.g. "3 references"). Click to find all references.
+- **Unused variable detection** -- local variables and parameters that are never used are grayed out with a hint diagnostic. Unused variable declarations have a quickfix action to remove them. Variables prefixed with `_` are exempt.
+- **Constant value hover** -- hovering a constant now shows its initializer value (e.g. `const int DURATION_TYPE_INSTANT = 0`).
+
 ## 1.3.0
 
 ### New Features

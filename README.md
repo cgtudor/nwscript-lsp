@@ -20,6 +20,9 @@ Built in Rust with [tower-lsp](https://github.com/ebkalderon/tower-lsp), featuri
 - **Signature help** -- parameter hints when typing function calls (triggered on `(` and `,`)
 - **Inlay hints** -- parameter name hints at call sites (e.g. `nObjectType: 1, sTemplate: "goblin01"`)
 - **Unused import detection** -- grayed-out `#include` directives with quick-fix removal
+- **Unused variable detection** -- grayed-out local variables and parameters that are never used, with quick-fix removal
+- **Code lens** -- reference counts above function definitions and struct declarations
+- **Document links** -- Ctrl+Click `#include` directives to open the resolved file
 - **Folding ranges** -- collapse functions, structs, control flow blocks, `#include` groups, and comment blocks
 - **Code formatting** -- full document, range, and on-type formatting with configurable style (Allman/K&R braces, line width, include sorting, and more)
 - **Semantic highlighting** -- AST-based highlighting for function calls, parameters, struct names, and field access

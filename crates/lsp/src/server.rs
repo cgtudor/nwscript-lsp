@@ -58,6 +58,10 @@ pub struct NwscriptLanguageServer {
     nwn_home: RwLock<Option<PathBuf>>,
     /// Last compiler diagnostics per file (cleared on edit, updated on save).
     compiler_diags: DashMap<Url, Vec<Diagnostic>>,
+    /// Cached unused-function diagnostics per file (computed on open/save, cleared on edit).
+    unused_fn_diags: DashMap<Url, Vec<Diagnostic>>,
+    /// Cached unused-function code actions per file (computed on open/save, cleared on edit).
+    unused_fn_actions: DashMap<Url, Vec<CodeAction>>,
 }
 
 impl NwscriptLanguageServer {
@@ -72,6 +76,8 @@ impl NwscriptLanguageServer {
             nwn_root: RwLock::new(None),
             nwn_home: RwLock::new(None),
             compiler_diags: DashMap::new(),
+            unused_fn_diags: DashMap::new(),
+            unused_fn_actions: DashMap::new(),
         }
     }
 
@@ -238,12 +244,43 @@ impl NwscriptLanguageServer {
                     index, uri, &doc.parsed, &doc.source, &doc.line_index,
                 );
                 diagnostics.extend(analysis.diagnostics);
+
+                // Unused variable diagnostics (grayed out with Unnecessary tag)
+                let var_analysis = providers::actions::analyze_unused_variables(
+                    &doc.parsed, &doc.source, &doc.line_index, uri,
+                );
+                diagnostics.extend(var_analysis.diagnostics);
             }
+        }
+
+        // Unused function diagnostics (from cache, computed on open/save)
+        if let Some(fn_diags) = self.unused_fn_diags.get(uri) {
+            diagnostics.extend(fn_diags.value().iter().cloned());
         }
 
         self.client
             .publish_diagnostics(uri.clone(), diagnostics, Some(doc.version))
             .await;
+    }
+
+    /// Compute unused-function diagnostics and cache them. Called on open/save only
+    /// (not on every keystroke) because it requires a full workspace scan.
+    fn compute_unused_functions(&self, uri: &Url) {
+        let Some(doc) = self.documents.get(uri) else {
+            return;
+        };
+        let guard = self.index.read().unwrap();
+        let Some(index) = guard.as_ref() else {
+            return;
+        };
+
+        let analysis = providers::actions::analyze_unused_functions(
+            index, &doc.parsed, &doc.source, &doc.line_index, uri,
+        );
+        self.unused_fn_diags
+            .insert(uri.clone(), analysis.diagnostics);
+        self.unused_fn_actions
+            .insert(uri.clone(), analysis.actions);
     }
 
     /// Run the external compiler and merge results with parser diagnostics.
@@ -293,9 +330,10 @@ impl NwscriptLanguageServer {
         )
         .await;
 
-        // Store compiler diagnostics and publish combined set
+        // Store compiler diagnostics, refresh unused function analysis, and publish
         self.compiler_diags
             .insert(uri.clone(), compiler_diagnostics);
+        self.compute_unused_functions(uri);
         self.publish_diagnostics_for(uri, false).await;
     }
 
@@ -375,6 +413,13 @@ impl LanguageServer for NwscriptLanguageServer {
                     work_done_progress_options: Default::default(),
                 })),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(true),
+                }),
+                document_link_provider: Some(DocumentLinkOptions {
+                    resolve_provider: Some(false),
+                    work_done_progress_options: Default::default(),
+                }),
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -421,6 +466,7 @@ impl LanguageServer for NwscriptLanguageServer {
         let text = params.text_document.text;
 
         self.documents.open(uri.clone(), version, text);
+        self.compute_unused_functions(&uri);
         self.publish_diagnostics_for(&uri, false).await;
     }
 
@@ -430,7 +476,9 @@ impl LanguageServer for NwscriptLanguageServer {
 
         if let Some(change) = params.content_changes.into_iter().next() {
             self.documents.update(&uri, version, change.text);
-            // Clear compiler diagnostics on edit — they'll refresh on next save
+            // Clear cached diagnostics on edit — they'll refresh on next save
+            self.unused_fn_diags.remove(&uri);
+            self.unused_fn_actions.remove(&uri);
             self.publish_diagnostics_for(&uri, true).await;
 
             // Also refresh diagnostics for other open documents so cross-file
@@ -452,6 +500,8 @@ impl LanguageServer for NwscriptLanguageServer {
         let uri = params.text_document.uri;
         self.documents.close(&uri);
         self.compiler_diags.remove(&uri);
+        self.unused_fn_diags.remove(&uri);
+        self.unused_fn_actions.remove(&uri);
         self.client
             .publish_diagnostics(uri, vec![], None)
             .await;
@@ -775,24 +825,42 @@ impl LanguageServer for NwscriptLanguageServer {
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = &params.text_document.uri;
+        let request_range = params.range;
         let Some(doc) = self.documents.get(uri) else {
             return Ok(None);
         };
 
         let guard = self.index.read().unwrap();
-        let actions = match guard.as_ref() {
-            Some(index) => {
-                let analysis = providers::actions::analyze_imports(
-                    index, uri, &doc.parsed, &doc.source, &doc.line_index,
-                );
-                analysis
-                    .actions
-                    .into_iter()
-                    .map(CodeActionOrCommand::CodeAction)
-                    .collect()
-            }
-            None => Vec::new(),
-        };
+        let mut all_actions: Vec<CodeAction> = Vec::new();
+
+        if let Some(index) = guard.as_ref() {
+            let analysis = providers::actions::analyze_imports(
+                index, uri, &doc.parsed, &doc.source, &doc.line_index,
+            );
+            all_actions.extend(analysis.actions);
+        }
+
+        // Unused variable quickfix actions
+        let var_analysis = providers::actions::analyze_unused_variables(
+            &doc.parsed, &doc.source, &doc.line_index, uri,
+        );
+        all_actions.extend(var_analysis.actions);
+
+        // Unused function quickfix actions (from cache, computed on open/save)
+        if let Some(fn_actions) = self.unused_fn_actions.get(uri) {
+            all_actions.extend(fn_actions.value().iter().cloned());
+        }
+
+        // Only return actions whose diagnostics intersect the requested range
+        let actions: Vec<CodeActionOrCommand> = all_actions
+            .into_iter()
+            .filter(|a| {
+                a.diagnostics.as_ref().map_or(true, |diags| {
+                    diags.iter().any(|d| ranges_overlap(&d.range, &request_range))
+                })
+            })
+            .map(CodeActionOrCommand::CodeAction)
+            .collect();
 
         Ok(Some(actions))
     }
@@ -817,6 +885,42 @@ impl LanguageServer for NwscriptLanguageServer {
         });
 
         Ok(result)
+    }
+
+    async fn document_link(
+        &self,
+        params: DocumentLinkParams,
+    ) -> Result<Option<Vec<DocumentLink>>> {
+        let uri = &params.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let links = self.with_index(|index| {
+            providers::document_links::document_links(&doc.parsed, &doc.line_index, index)
+        });
+
+        Ok(links.filter(|l| !l.is_empty()))
+    }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        let uri = &params.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        // Pre-resolve all lenses with a single batch workspace scan
+        let lenses = self
+            .with_index(|index| {
+                providers::code_lens::code_lenses(&doc.parsed, &doc.line_index, index, uri)
+            })
+            .unwrap_or_default();
+        Ok(Some(lenses))
+    }
+
+    async fn code_lens_resolve(&self, lens: CodeLens) -> Result<CodeLens> {
+        // Lenses are pre-resolved in code_lens(); nothing to do here
+        Ok(lens)
     }
 
     async fn folding_range(
@@ -880,6 +984,11 @@ impl LanguageServer for NwscriptLanguageServer {
 
         Ok(Some(hints.unwrap_or_default()))
     }
+}
+
+/// Check if two LSP ranges overlap (share at least one position).
+fn ranges_overlap(a: &Range, b: &Range) -> bool {
+    a.start.line <= b.end.line && b.start.line <= a.end.line
 }
 
 /// Search for the bundled `nwn_script_comp` binary next to our own executable.

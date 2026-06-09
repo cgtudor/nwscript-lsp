@@ -55,7 +55,11 @@ pub fn hover_for_symbol(sym: &SymbolInfo) -> Hover {
         }
         SymbolKind::Constant => {
             let ty = sym.detail.strip_prefix("const ").unwrap_or(&sym.detail);
-            let mut s = format!("```nwscript\nconst {} {}\n```", ty, sym.name);
+            let value_part = match &sym.initializer_text {
+                Some(v) => format!(" = {v}"),
+                None => String::new(),
+            };
+            let mut s = format!("```nwscript\nconst {} {}{}\n```", ty, sym.name, value_part);
             s.push_str(&format!("\n\n*{}*", sym.include_name));
             if let Some(doc) = &sym.doc {
                 s.push_str("\n\n---\n\n");

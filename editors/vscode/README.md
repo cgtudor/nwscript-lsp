@@ -12,6 +12,9 @@ Language server for **NWScript**, the scripting language used by Neverwinter Nig
 - **Signature Help** -- parameter hints as you type function calls
 - **Diagnostics** -- real-time parser errors on keystroke, compiler errors on save (via `nwn_script_comp`)
 - **Unused Import Detection** -- grayed-out `#include` directives that aren't referenced, with quick-fix removal
+- **Unused Variable Detection** -- grayed-out local variables and parameters that are never used, with quick-fix removal
+- **Code Lens** -- reference counts above function definitions and struct declarations
+- **Document Links** -- Ctrl+Click `#include` directives to open the resolved file
 - **Inlay Hints** -- parameter name hints at call sites (e.g. `nObjectType: 1, sTemplate: "goblin01"`)
 - **Workspace Symbol Search** -- find any symbol across the workspace with `Ctrl+T`
 - **Document Symbols** -- outline view of functions, structs, and constants

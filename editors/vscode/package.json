@@ -2,7 +2,7 @@
   "name": "nwscript-lsp",
   "displayName": "NWScript Language Server",
   "description": "Language server for NWScript (Neverwinter Nights scripting language) — completions, diagnostics, go-to-definition, hover, formatting, and more.",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "publisher": "krezk",
   "license": "MIT",
   "icon": "icon.png",

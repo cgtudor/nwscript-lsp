@@ -66,6 +66,8 @@ pub struct SymbolInfo {
     pub is_definition: bool,
     /// The include name for auto-import (file stem without extension).
     pub include_name: String,
+    /// For constants/variables: raw text of the initializer expression.
+    pub initializer_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -398,6 +400,7 @@ fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str, include_name: &
                         return_type: Some(ret_ty),
                         is_definition: !f.is_prototype(),
                         include_name: include_name.to_string(),
+                        initializer_text: None,
                     });
                 }
             }
@@ -429,6 +432,7 @@ fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str, include_name: &
                         return_type: None,
                         is_definition: true,
                         include_name: include_name.to_string(),
+                        initializer_text: None,
                     });
 
                     // Also index struct fields for field access completion
@@ -451,6 +455,7 @@ fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str, include_name: &
                                 return_type: None,
                                 is_definition: true,
                                 include_name: include_name.to_string(),
+                                initializer_text: None,
                             });
                         }
                     }
@@ -459,6 +464,10 @@ fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str, include_name: &
             Declaration::GlobalVar(v) => {
                 if let Some(name) = &v.name {
                     let ty = crate::providers::symbols::format_type(&v.ty.kind);
+                    let init_text = v
+                        .initializer
+                        .as_ref()
+                        .map(|expr| expr.span().text(source).to_string());
                     symbols.push(SymbolInfo {
                         name: name.name.clone(),
                         kind: if v.is_const {
@@ -479,6 +488,7 @@ fn extract_symbols(parsed: &ParsedFile, uri: &Url, source: &str, include_name: &
                         return_type: None,
                         is_definition: true,
                         include_name: include_name.to_string(),
+                        initializer_text: init_text,
                     });
                 }
             }

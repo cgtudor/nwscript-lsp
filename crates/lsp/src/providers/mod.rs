@@ -1,6 +1,8 @@
 pub mod actions;
+pub mod code_lens;
 pub mod completion;
 pub mod definition;
+pub mod document_links;
 pub mod folding;
 pub mod formatting;
 pub mod hover;

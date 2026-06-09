@@ -1,8 +1,11 @@
 import * as path from "path";
 import * as fs from "fs";
 import {
+  commands,
   workspace,
   ExtensionContext,
+  Position,
+  Uri,
   window,
 } from "vscode";
 import {
@@ -73,6 +76,15 @@ export function activate(context: ExtensionContext) {
     "NWScript Language Server",
     serverOptions,
     clientOptions
+  );
+
+  // Register command for code lens "N references" click
+  context.subscriptions.push(
+    commands.registerCommand("nwscript-lsp.findReferences", (uriStr: string, pos: { line: number; character: number }) => {
+      const uri = Uri.parse(uriStr);
+      const position = new Position(pos.line, pos.character);
+      commands.executeCommand("editor.action.findReferences", uri, position);
+    })
   );
 
   client.start();

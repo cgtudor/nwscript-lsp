@@ -35,7 +35,9 @@ crates/
         workspace_symbols.rs # Workspace-wide symbol search (Ctrl+T)
         inlay_hints.rs # Parameter name hints at call sites
         folding.rs     # Folding ranges (functions, structs, blocks, includes, comments)
-        actions.rs     # Code actions (remove unused imports)
+        actions.rs     # Code actions (remove unused imports, remove unused variables)
+        code_lens.rs   # Reference counts above functions and structs
+        document_links.rs # Clickable #include directives
 editors/
   vscode/          # VS Code extension (thin TypeScript client)
     src/extension.ts
@@ -168,9 +170,33 @@ Users should also set in their VS Code settings:
 - **Comment folding**: block comments (`/* */`) and consecutive line comment groups via `Lexer::tokenize()` token scan
 - Only multi-line spans produce fold ranges
 
+### Document Links (document_links.rs)
+- Makes `#include "filename"` directives Ctrl+Click-able
+- Uses `IncludeDecl.path_span` for the link range and `index.resolve_include()` for the target URI
+
+### Code Lens (code_lens.rs)
+- Shows "N references" above function definitions and struct declarations
+- **Batch reference counting** — collects all symbol names in the file, then scans the workspace once for all of them via `count_references_batch()`. This is O(total_source) regardless of how many functions the file has, vs. O(N * total_source) for individual counting
+- **Pre-resolved** — lenses are returned with commands already filled in from `textDocument/codeLens`, so `codeLens/resolve` is a no-op
+- Subtracts declaration count from the total for actual usage count
+- Clicking triggers VS Code's built-in `editor.action.findReferences` command
+
+### Unused Variable Detection (actions.rs)
+- Walks each function body collecting all `Stmt::VarDecl` declarations and function parameters
+- For each, counts whole-word occurrences in the function body (skipping strings/comments)
+- Variables with only 1 occurrence (the declaration itself) or 0 (parameters) are flagged unused
+- Variables prefixed with `_` are exempt (intentionally unused convention)
+- Produces `DiagnosticTag::UNNECESSARY` hints (grayed out) + quickfix code actions to remove variable declarations
+- Parameters get diagnostics but no removal quickfix (removing a param breaks the function signature)
+
+### Constant Value Hover
+- `SymbolInfo.initializer_text` stores the raw expression text from `VarDecl.initializer`
+- Hover for constants now shows `const int NAME = VALUE` instead of just `const int NAME`
+
 ## Important Notes
 
 - **Nasher cache is critical** — compiler diagnostics depend on `.nasher/cache/<target>/` existing. If the user hasn't run `nasher compile` yet, the cache won't exist and compiler diagnostics will fall back to multi-directory `--dirs` which can produce false positives
 - **nwscript.nss special handling** — it's the only file searched outside normal source dirs. It's also the only file implicitly included in every file's visible symbols
 - **`is_definition` flag** — SymbolInfo tracks whether a function has a body. Goto-definition always prefers implementations over forward declarations
-- **Diagnostic merging** — parser diagnostics (on keystroke), compiler diagnostics (on save), and unused-import hints are all merged and published together. Compiler diags are cleared on edit to prevent stale errors
+- **Diagnostic merging** — parser diagnostics (on keystroke), compiler diagnostics (on save), unused-import hints, and unused-variable hints are all merged and published together. Compiler diags are cleared on edit to prevent stale errors
+- **Unused function analysis is deferred** — unlike import/variable analysis (fast, file-local), unused function detection requires a full workspace scan. It only runs on `did_open` and `did_save`, with results cached in `unused_fn_diags`/`unused_fn_actions` DashMaps. Cache is cleared on edit so stale hints disappear until next save. Uses `count_references_batch()` for O(total_source) instead of O(N * total_source)

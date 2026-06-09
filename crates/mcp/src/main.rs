@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -121,6 +122,24 @@ struct SymbolSearchParams {
     name: String,
     #[schemars(description = "Optional file path for scoping the search to symbols visible from that file's include tree")]
     file_path: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct RenameParams {
+    #[schemars(description = "Absolute or relative path to a .nss file containing the symbol")]
+    file_path: String,
+    #[schemars(description = "1-based line number of the symbol to rename")]
+    line: u32,
+    #[schemars(description = "1-based column number of the symbol to rename")]
+    column: u32,
+    #[schemars(description = "The new name for the symbol")]
+    new_name: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct WorkspaceDiagnosticsParams {
+    #[schemars(description = "If true, also include unused import hints (default: false)")]
+    include_hints: Option<bool>,
 }
 
 // =============================================================================
@@ -424,6 +443,229 @@ impl NwscriptMcp {
             output.push('\n');
         }
         output
+    }
+
+    #[tool(description = "Rename a NWScript symbol across the entire workspace. Finds all references and applies the rename to files on disk. Returns a summary of all files modified. Uses 1-based line and column numbers.")]
+    fn rename_symbol(
+        &self,
+        Parameters(RenameParams {
+            file_path,
+            line,
+            column,
+            new_name,
+        }): Parameters<RenameParams>,
+    ) -> String {
+        let path = resolve_path(&file_path);
+        let Some(uri) = self.refresh_file(&path) else {
+            return format!("Error: failed to read {}", path.display());
+        };
+        let Some(file) = self.index.get_file(&uri) else {
+            return "Error: file not indexed".to_string();
+        };
+
+        let line0 = line.saturating_sub(1);
+        let col0 = column.saturating_sub(1);
+        let position = Position::new(line0, col0);
+
+        // Validate the identifier at the position
+        let Some(offset) = file.line_index.offset(line0, col0) else {
+            return "Error: position out of range".to_string();
+        };
+        let Some(old_name) = providers::hover::find_ident_at(&file.source, offset as usize) else {
+            return "No identifier at position".to_string();
+        };
+
+        // Validate new name is a legal identifier
+        if new_name.is_empty()
+            || !new_name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            || new_name.as_bytes()[0].is_ascii_digit()
+        {
+            return format!("Error: '{}' is not a valid NWScript identifier", new_name);
+        }
+
+        // Find all references (includes the declaration)
+        let refs = providers::references::find_references(
+            &self.index,
+            &file.source,
+            &file.line_index,
+            position,
+            &uri,
+            true,
+        );
+
+        if refs.is_empty() {
+            return format!("No references found for '{}'.", old_name);
+        }
+
+        // Group edits by file URI
+        let mut edits_by_file: HashMap<Url, Vec<(u32, u32, u32, u32)>> = HashMap::new();
+        for loc in &refs {
+            edits_by_file.entry(loc.uri.clone()).or_default().push((
+                loc.range.start.line,
+                loc.range.start.character,
+                loc.range.end.line,
+                loc.range.end.character,
+            ));
+        }
+
+        // Apply edits to each file (process in reverse order to preserve offsets)
+        let mut modified_files = Vec::new();
+        let mut total_replacements = 0;
+
+        for (file_uri, ranges) in &edits_by_file {
+            let Some(indexed) = self.index.get_file(file_uri) else {
+                continue;
+            };
+            let file_path = match file_uri.to_file_path() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            let mut source = indexed.source.clone();
+
+            // Sort ranges in reverse order so replacements don't shift later offsets
+            let mut sorted_ranges = ranges.clone();
+            sorted_ranges.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+
+            let mut count = 0;
+            for (sl, sc, el, ec) in &sorted_ranges {
+                let Some(start_off) = indexed.line_index.offset(*sl, *sc) else {
+                    continue;
+                };
+                let Some(end_off) = indexed.line_index.offset(*el, *ec) else {
+                    continue;
+                };
+                let start = start_off as usize;
+                let end = end_off as usize;
+                if start <= end && end <= source.len() {
+                    source.replace_range(start..end, &new_name);
+                    count += 1;
+                }
+            }
+
+            if count > 0 {
+                if let Err(e) = std::fs::write(&file_path, &source) {
+                    return format!(
+                        "Error: failed to write {}: {}",
+                        file_path.display(),
+                        e
+                    );
+                }
+                // Re-index the modified file
+                self.index
+                    .update_file(file_uri, source);
+                modified_files.push(format!(
+                    "  {} ({} replacement{})",
+                    file_path.display(),
+                    count,
+                    if count == 1 { "" } else { "s" },
+                ));
+                total_replacements += count;
+            }
+        }
+
+        format!(
+            "Renamed '{}' -> '{}': {} replacement{} across {} file{}:\n{}",
+            old_name,
+            new_name,
+            total_replacements,
+            if total_replacements == 1 { "" } else { "s" },
+            modified_files.len(),
+            if modified_files.len() == 1 { "" } else { "s" },
+            modified_files.join("\n"),
+        )
+    }
+
+    #[tool(description = "Run diagnostics across all NWScript (.nss) files in the workspace. Returns parse errors and optionally unused import hints for every file that has issues. Useful for finding all problems at once.")]
+    fn workspace_diagnostics(
+        &self,
+        Parameters(WorkspaceDiagnosticsParams { include_hints }): Parameters<
+            WorkspaceDiagnosticsParams,
+        >,
+    ) -> String {
+        let include_hints = include_hints.unwrap_or(false);
+        let all_uris = self.index.all_files();
+
+        let mut files_with_errors = 0;
+        let mut total_errors = 0;
+        let mut total_hints = 0;
+        let mut output = Vec::new();
+
+        for file_uri in &all_uris {
+            let Some(file) = self.index.get_file(file_uri) else {
+                continue;
+            };
+
+            let file_path = file_uri
+                .to_file_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| file_uri.to_string());
+
+            let mut file_diags = Vec::new();
+
+            // Parser errors
+            for err in &file.parsed.errors {
+                let (line, col) = file.line_index.line_col(err.span.start);
+                file_diags.push(format!(
+                    "  {}:{}: error: {}",
+                    line + 1,
+                    col + 1,
+                    err.message,
+                ));
+                total_errors += 1;
+            }
+
+            // Unused import hints
+            if include_hints {
+                let analysis = providers::actions::analyze_imports(
+                    &self.index,
+                    file_uri,
+                    &file.parsed,
+                    &file.source,
+                    &file.line_index,
+                );
+                for diag in &analysis.diagnostics {
+                    file_diags.push(format!(
+                        "  {}:{}: hint: {}",
+                        diag.range.start.line + 1,
+                        diag.range.start.character + 1,
+                        diag.message,
+                    ));
+                    total_hints += 1;
+                }
+            }
+
+            if !file_diags.is_empty() {
+                files_with_errors += 1;
+                output.push(format!("{}:\n{}", file_path, file_diags.join("\n")));
+            }
+        }
+
+        if output.is_empty() {
+            format!(
+                "No diagnostics found across {} files.",
+                all_uris.len(),
+            )
+        } else {
+            let mut summary = format!(
+                "{} error{} in {} file{} (out of {} total)",
+                total_errors,
+                if total_errors == 1 { "" } else { "s" },
+                files_with_errors,
+                if files_with_errors == 1 { "" } else { "s" },
+                all_uris.len(),
+            );
+            if include_hints {
+                summary.push_str(&format!(
+                    ", {} unused import hint{}",
+                    total_hints,
+                    if total_hints == 1 { "" } else { "s" },
+                ));
+            }
+            summary.push_str(":\n\n");
+            summary.push_str(&output.join("\n\n"));
+            summary
+        }
     }
 
     #[tool(description = "Show the #include dependency tree for a NWScript file -- what files it includes (directly and transitively) and total visible symbol count.")]
