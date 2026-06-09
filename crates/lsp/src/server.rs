@@ -508,6 +508,15 @@ impl LanguageServer for NwscriptLanguageServer {
             None => return Ok(None),
         };
 
+        // Check local variables/parameters first (higher priority)
+        if let Some(detail) = providers::completion::find_local_detail(
+            &doc.parsed,
+            offset,
+            &target_name,
+        ) {
+            return Ok(Some(providers::hover::hover_for_local(&detail)));
+        }
+
         // Search cross-file symbols
         let hover = self.with_index(|index| {
             let symbols = index.visible_symbols(uri);

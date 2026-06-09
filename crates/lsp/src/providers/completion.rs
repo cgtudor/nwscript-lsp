@@ -159,6 +159,15 @@ pub fn is_local_symbol(parsed: &ParsedFile, cursor_offset: u32, name: &str) -> b
         .any(|l| l.name == name)
 }
 
+/// Find a local variable or parameter by name at the given cursor offset.
+/// Returns the detail string (e.g. "(parameter) object oPC") if found.
+pub fn find_local_detail(parsed: &ParsedFile, cursor_offset: u32, name: &str) -> Option<String> {
+    collect_locals(parsed, cursor_offset)
+        .into_iter()
+        .find(|l| l.name == name)
+        .map(|l| l.detail)
+}
+
 // =============================================================================
 // Local variable extraction
 // =============================================================================

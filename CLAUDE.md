@@ -27,7 +27,7 @@ crates/
       providers/
         completion.rs  # Completion with auto-import + local variable/parameter completion
         definition.rs  # Goto-definition (prefers implementations over prototypes)
-        hover.rs       # Hover info with doc comment extraction
+        hover.rs       # Hover info: workspace symbols + local variables/parameters
         references.rs  # Find all references (whole-word search, skips comments/strings)
         semantic_tokens.rs # AST-based semantic highlighting (functions, types, params, etc.)
         signature.rs   # Signature help (parameter hints)

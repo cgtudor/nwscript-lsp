@@ -8,7 +8,7 @@ Language server for **NWScript**, the scripting language used by Neverwinter Nig
 - **Go to Definition** -- jump to function/constant/struct definitions (prefers implementations over forward declarations)
 - **Find References** -- find all usages of a symbol across the workspace
 - **Rename Symbol** -- rename functions, constants, and local variables across all files
-- **Hover** -- type signatures and doc comments on hover
+- **Hover** -- type signatures, doc comments, and source file for functions, structs, constants, variables, and local variables/parameters
 - **Signature Help** -- parameter hints as you type function calls
 - **Diagnostics** -- real-time parser errors on keystroke, compiler errors on save (via `nwn_script_comp`)
 - **Unused Import Detection** -- grayed-out `#include` directives that aren't referenced, with quick-fix removal

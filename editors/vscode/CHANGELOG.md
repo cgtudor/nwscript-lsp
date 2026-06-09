@@ -8,6 +8,13 @@
 - **Workspace symbol search** -- find any function, struct, constant, or variable across the entire workspace with `Ctrl+T` (or `#` in the command palette). Case-insensitive substring matching with prefix matches ranked first.
 - **Folding ranges** -- collapse function bodies, struct bodies, control flow blocks (if/while/for/switch), consecutive `#include` groups, block comments, and consecutive line comment groups in the editor.
 
+### Improvements
+
+- **Hover on local variables and parameters** -- hovering over a local variable or function parameter now shows its type and kind (e.g. `(parameter) object oPC`, `(local) int nCount`). Previously only workspace-level symbols had hover info.
+- **Improved function hover** -- function hover now shows parameter default values (e.g. `int bIncludeDead = FALSE`) and the source file name. Removed the `{...}` noise from function bodies.
+- **Improved symbol hover** -- all symbol hovers (constants, global variables, structs) now show the source file they are defined in.
+- **Subtler inlay hint styling** -- parameter hints now use a transparent background and faded text color so they blend in rather than standing out as boxes.
+
 ### New Settings
 
 - **`inlayHints.enabled`** -- enable/disable parameter name inlay hints (default: `true`)

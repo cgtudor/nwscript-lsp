@@ -13,7 +13,7 @@ Built in Rust with [tower-lsp](https://github.com/ebkalderon/tower-lsp), featuri
 - **Document symbols** -- outline of functions, structs, constants, and global variables
 - **Workspace symbol search** -- find any symbol across the workspace with `Ctrl+T`
 - **Completion** -- all workspace symbols with auto-import, plus local variables and parameters (sorted by relevance)
-- **Hover** -- type information and doc comments for functions, structs, and variables across files
+- **Hover** -- type info, doc comments, default values, and source file for functions, structs, constants, variables, and local variables/parameters
 - **Go to definition** -- jump to definitions across files, prefers implementations over forward declarations
 - **Find references** -- find all usages of a symbol across the workspace
 - **Rename symbol** -- rename functions, constants, and local variables across all files
