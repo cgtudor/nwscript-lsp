@@ -136,7 +136,7 @@ Users should also set in their VS Code settings:
     "[nwscript]": {
         "editor.formatOnSave": true,
         "editor.formatOnType": true,
-        "editor.defaultFormatter": "Megalomaniac.nwscript-lsp"
+        "editor.defaultFormatter": "krezk.nwscript-lsp"
     }
 }
 ```

@@ -129,7 +129,7 @@ Recommended VS Code settings for NWScript files:
 "[nwscript]": {
     "editor.formatOnSave": true,
     "editor.formatOnType": true,
-    "editor.defaultFormatter": "Megalomaniac.nwscript-lsp"
+    "editor.defaultFormatter": "krezk.nwscript-lsp"
 }
 ```
 

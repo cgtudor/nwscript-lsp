@@ -2,8 +2,8 @@
   "name": "nwscript-lsp",
   "displayName": "NWScript Language Server",
   "description": "Language server for NWScript (Neverwinter Nights scripting language) — completions, diagnostics, go-to-definition, hover, formatting, and more.",
-  "version": "0.1.0",
-  "publisher": "Megalomaniac",
+  "version": "1.0.0",
+  "publisher": "krezk",
   "license": "MIT",
   "icon": "icon.png",
   "engines": {
@@ -45,7 +45,7 @@
     ],
     "configurationDefaults": {
       "[nwscript]": {
-        "editor.defaultFormatter": "Megalomaniac.nwscript-lsp",
+        "editor.defaultFormatter": "krezk.nwscript-lsp",
         "editor.formatOnSave": true
       }
     },
