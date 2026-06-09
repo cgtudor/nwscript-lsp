@@ -56,9 +56,10 @@ cargo build --release -p nwscript-lsp
 # Package VS Code extension (requires npm install first)
 cd editors/vscode
 npm install
-npm run package          # esbuild bundle + minify
 cp ../../target/release/nwscript-lsp.exe bin/
-npx @vscode/vsce package --allow-missing-repository
+npm run package:win      # esbuild bundle + platform-specific VSIX
+# For Linux: npm run package:linux (with Linux binaries in bin/)
+# Publish both: npm run publish:all
 ```
 
 ## Key Design Decisions

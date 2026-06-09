@@ -59,15 +59,32 @@ The binary will be at `target/release/nwscript-lsp.exe` (Windows) or `target/rel
 
 ### Package the VS Code extension
 
+Platform-specific packages are used so each target only ships its own native binary.
+
 ```bash
 cd editors/vscode
 npm install
-npm run package          # esbuild bundle + minify
+
+# Windows (from Windows)
+cargo build --release -p nwscript-lsp
 cp ../../target/release/nwscript-lsp.exe bin/
-npx @vscode/vsce package --allow-missing-repository
+# Also place nwn_script_comp.exe in bin/
+npm run package:win      # produces nwscript-lsp-win32-x64-X.Y.Z.vsix
+
+# Linux (from Linux or cross-compile)
+cargo build --release -p nwscript-lsp --target x86_64-unknown-linux-gnu
+cp ../../target/x86_64-unknown-linux-gnu/release/nwscript-lsp bin/
+# Also place Linux nwn_script_comp in bin/
+npm run package:linux    # produces nwscript-lsp-linux-x64-X.Y.Z.vsix
+
+# Publish both targets
+npm run publish:all
 ```
 
-This produces a `.vsix` file you can install in VS Code via **Extensions > Install from VSIX**.
+For a universal (non-platform-specific) package:
+```bash
+npx @vscode/vsce package --allow-missing-repository
+```
 
 ## Installation
 
