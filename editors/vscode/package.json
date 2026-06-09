@@ -76,13 +76,19 @@
           "order": 4,
           "markdownDescription": "Path to `nwscript.nss` (engine built-in definitions). If empty, extracted from NWN installation or searched in workspace."
         },
+        "nwscriptLsp.extractVanillaScripts": {
+          "type": "boolean",
+          "default": true,
+          "order": 5,
+          "markdownDescription": "Extract vanilla `.nss` scripts from the NWN:EE installation (KEY/BIF files) for include resolution and go-to-definition. Disable if you only need `nwscript.nss` and want faster startup."
+        },
         "nwscriptLsp.includeDirs": {
           "type": "array",
           "items": {
             "type": "string"
           },
           "default": [],
-          "order": 5,
+          "order": 6,
           "markdownDescription": "Additional include directories for NWScript source files. These are added alongside directories discovered from `nasher.cfg`."
         },
         "nwscriptLsp.excludeDirs": {
@@ -96,7 +102,7 @@
             "build",
             "output"
           ],
-          "order": 6,
+          "order": 7,
           "markdownDescription": "Directory names to exclude from source scanning. Directories starting with `.` are always excluded. Use this to skip folders that contain `.nss` files you don't want indexed (e.g., `docs`, `reference`)."
         },
         "nwscriptLsp.formatter.braceStyle": {

@@ -39,6 +39,12 @@ If auto-detection doesn't find your installation, set it explicitly:
 "nwscriptLsp.nwnRoot": "C:/Program Files (x86)/Steam/steamapps/common/Neverwinter Nights"
 ```
 
+If you don't need vanilla scripts and only want `nwscript.nss` (engine built-ins), you can disable the extraction for faster startup:
+
+```json
+"nwscriptLsp.extractVanillaScripts": false
+```
+
 ### Compiler Diagnostics
 
 For on-save compiler diagnostics, the extension needs `nwn_script_comp` (the NWN script compiler). It looks for a bundled copy next to the extension binary, then falls back to `PATH`. You can also set an explicit path:
@@ -61,6 +67,7 @@ All settings are under the `nwscriptLsp` namespace. Open **Settings** (Ctrl+,) a
 | `serverPath` | `""` | Path to `nwscript-lsp` binary. Empty = bundled or PATH. |
 | `nwnRoot` | `""` | Path to NWN:EE installation. Empty = auto-detect from env/Steam/Beamdog/GOG. |
 | `nwscriptNssPath` | `""` | Path to `nwscript.nss`. Empty = extracted from NWN install or searched in workspace. |
+| `extractVanillaScripts` | `true` | Extract vanilla `.nss` scripts from NWN:EE KEY/BIF files. Set to `false` to skip extraction if you only need `nwscript.nss`. |
 | `includeDirs` | `[]` | Additional source directories (added to those from `nasher.cfg`). |
 | `excludeDirs` | `["node_modules", "target", "build", "output"]` | Directory names to skip when scanning for `.nss` files. Dot-prefixed directories (`.git`, `.nasher`, etc.) are always skipped. |
 

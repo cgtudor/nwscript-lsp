@@ -26,6 +26,9 @@ pub struct NwscriptConfig {
     /// Path to NWN:EE installation directory (contains data/ with KEY/BIF files).
     /// If empty/None, auto-detected from NWN_ROOT env var, Steam, Beamdog, or GOG.
     pub nwn_root: Option<String>,
+    /// Whether to extract vanilla .nss scripts from KEY/BIF files.
+    /// Defaults to true. Set to false to skip extraction (only nwscript.nss will be used).
+    pub extract_vanilla_scripts: Option<bool>,
     #[serde(default)]
     pub formatter: providers::formatting::FormatterSettings,
 }
@@ -73,7 +76,7 @@ impl NwscriptLanguageServer {
         }
 
         // Read config settings
-        let (exclude_dirs, nwscript_nss_path, nwn_root_setting) = {
+        let (exclude_dirs, nwscript_nss_path, nwn_root_setting, extract_vanilla) = {
             let config = self.config.read().unwrap();
 
             // Also add any extra include dirs from config
@@ -104,16 +107,24 @@ impl NwscriptLanguageServer {
                 .map(|s| s.as_str())
                 .map(String::from);
 
-            (exclude, nss_path, nwn_root)
+            let extract_vanilla = config.extract_vanilla_scripts.unwrap_or(true);
+
+            (exclude, nss_path, nwn_root, extract_vanilla)
         };
 
         tracing::info!("exclude dirs: {:?}", exclude_dirs);
 
         // Extract vanilla .nss scripts from NWN:EE installation KEY/BIF files.
         // These are written to a cache directory and indexed at lowest priority
-        // (workspace files override them).
-        let (vanilla_cache_dir, nwn_root) =
-            extract_vanilla_scripts(nwn_root_setting.as_deref());
+        // (workspace files override them). Can be disabled via extractVanillaScripts setting.
+        let (vanilla_cache_dir, nwn_root) = if extract_vanilla {
+            extract_vanilla_scripts(nwn_root_setting.as_deref())
+        } else {
+            tracing::info!("vanilla script extraction disabled by setting");
+            // Still detect NWN root for compiler --root flag
+            let nwn_root = crate::nwn_install::find_nwn_root(nwn_root_setting.as_deref());
+            (None, nwn_root)
+        };
         *self.nwn_root.write().unwrap() = nwn_root;
 
         // Detect NWN user directory for compiler --userdirectory flag

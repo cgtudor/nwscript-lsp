@@ -49,6 +49,7 @@ export function activate(context: ExtensionContext) {
       excludeDirs: config.get<string[]>("excludeDirs"),
       nwscriptNssPath: config.get<string>("nwscriptNssPath", ""),
       nwnRoot: config.get<string>("nwnRoot", ""),
+      extractVanillaScripts: config.get<boolean>("extractVanillaScripts", true),
       formatter: {
         maxLineWidth: config.get<number>("formatter.maxLineWidth"),
         braceStyle: config.get<string>("formatter.braceStyle"),

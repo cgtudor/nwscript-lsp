@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+### New Settings
+
+- **`extractVanillaScripts`** -- new boolean setting (default: `true`) to disable extraction of vanilla `.nss` scripts from KEY/BIF files. Users who only need `nwscript.nss` can set this to `false` for faster startup.
+
 ## 1.1.0
 
 ### New Features
