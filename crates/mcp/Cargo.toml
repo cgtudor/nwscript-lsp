@@ -1,0 +1,21 @@
+[package]
+name = "nwscript-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP server exposing NWScript language intelligence for AI coding assistants"
+
+[[bin]]
+name = "nwscript-mcp"
+path = "src/main.rs"
+
+[dependencies]
+nwscript-parser = { workspace = true }
+nwscript-lsp = { path = "../lsp" }
+rmcp = { version = "1.7", features = ["server", "transport-io", "macros"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

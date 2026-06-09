@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/parser",
     "crates/lsp",
+    "crates/mcp",
 ]
 
 [workspace.package]

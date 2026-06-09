@@ -1,15 +1,6 @@
 use tower_lsp::{LspService, Server};
 use tracing_subscriber::EnvFilter;
 
-mod diagnostics;
-mod document;
-mod index;
-mod keybif;
-mod nasher;
-mod nwn_install;
-mod providers;
-mod server;
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -22,6 +13,7 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(server::NwscriptLanguageServer::new);
+    let (service, socket) =
+        LspService::new(nwscript_lsp::server::NwscriptLanguageServer::new);
     Server::new(stdin, stdout, socket).serve(service).await;
 }

@@ -903,7 +903,7 @@ fn find_bundled_compiler() -> Option<PathBuf> {
 }
 
 /// Default directory names to exclude from source scanning.
-fn default_exclude_dirs() -> Vec<String> {
+pub fn default_exclude_dirs() -> Vec<String> {
     ["node_modules", "target", "build", "output"]
         .iter()
         .map(|s| s.to_string())
@@ -913,7 +913,7 @@ fn default_exclude_dirs() -> Vec<String> {
 /// Extract vanilla .nss scripts from the NWN:EE installation into a cache dir.
 ///
 /// Returns (cache directory, NWN root path) if extraction succeeded.
-fn extract_vanilla_scripts(nwn_root_setting: Option<&str>) -> (Option<PathBuf>, Option<PathBuf>) {
+pub fn extract_vanilla_scripts(nwn_root_setting: Option<&str>) -> (Option<PathBuf>, Option<PathBuf>) {
     let Some(nwn_root) = crate::nwn_install::find_nwn_root(nwn_root_setting) else {
         return (None, None);
     };
