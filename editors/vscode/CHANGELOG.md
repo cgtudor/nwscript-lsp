@@ -5,9 +5,19 @@
 ### New Features
 
 - **Document links** -- `#include "filename"` directives are now clickable (Ctrl+Click) to open the resolved file.
-- **Code lens** -- reference counts shown above function definitions and struct declarations (e.g. "3 references"). Click to find all references.
+- **Code lens** -- reference counts shown above function definitions, struct declarations, and global variable/constant declarations (e.g. "3 references"). Click to find all references.
 - **Unused variable detection** -- local variables and parameters that are never used are grayed out with a hint diagnostic. Unused variable declarations have a quickfix action to remove them. Variables prefixed with `_` are exempt.
-- **Constant value hover** -- hovering a constant now shows its initializer value (e.g. `const int DURATION_TYPE_INSTANT = 0`).
+- **Unused function detection** -- functions that are never referenced anywhere in the workspace are grayed out with a quickfix to remove them. Entry points (`main`, `StartingConditional`) and `_`-prefixed functions are exempt.
+- **Initializer value hover** -- hovering a constant or global variable now shows its initializer value (e.g. `const int DURATION_TYPE_INSTANT = 0`, `int TRUE = 1`).
+
+### Performance
+
+- **Batch reference counting** -- code lens and unused function detection now scan the workspace once for all symbols (O(total_source)) instead of once per symbol (O(N * total_source)). Dramatically faster for files with many functions.
+- **Inlay hints** -- builds a symbol lookup map once per request instead of walking the include tree per function call. Large files (1000+ lines) are now near-instant.
+- **Completion** -- iterates workspace symbols by reference (no mass clone) and pre-computes the include tree set once.
+- **Code actions** -- import and variable analysis results are cached during diagnostic publishing. The lightbulb/quickfix menu opens instantly instead of recomputing.
+- **File open** -- initial diagnostics (parser errors, imports, variables) publish immediately. Unused function analysis runs after and publishes a second update.
+- **Editing** -- `did_change` only processes the edited file, not all open documents.
 
 ## 1.3.0
 

@@ -35,8 +35,8 @@ crates/
         workspace_symbols.rs # Workspace-wide symbol search (Ctrl+T)
         inlay_hints.rs # Parameter name hints at call sites
         folding.rs     # Folding ranges (functions, structs, blocks, includes, comments)
-        actions.rs     # Code actions (remove unused imports, remove unused variables)
-        code_lens.rs   # Reference counts above functions and structs
+        actions.rs     # Code actions (remove unused imports, remove unused variables/functions)
+        code_lens.rs   # Reference counts above functions, structs, and global vars/constants
         document_links.rs # Clickable #include directives
 editors/
   vscode/          # VS Code extension (thin TypeScript client)
@@ -55,17 +55,31 @@ cargo check
 # Run all tests (87 tests: lexer, parser, formatter, providers, nasher, integration)
 cargo test
 
-# Build release binary
+# Build release binary (Windows)
 cargo build --release -p nwscript-lsp
+
+# Build release binary (Linux cross-compile from Windows)
+# Option A: cargo-zigbuild (zig.cmd wrapper at C:\Users\User\.local\bin\zig.cmd)
+cargo zigbuild --release -p nwscript-lsp --target x86_64-unknown-linux-gnu
+# Option B: WSL
+wsl bash -c 'cd /mnt/d/tdn/workspace/nwscript-lsp && cargo build --release -p nwscript-lsp'
 
 # Package VS Code extension (requires npm install first)
 cd editors/vscode
 npm install
 cp ../../target/release/nwscript-lsp.exe bin/
 npm run package:win      # esbuild bundle + platform-specific VSIX
-# For Linux: npm run package:linux (with Linux binaries in bin/)
-# Publish both: npm run publish:all
+# For Linux: swap bin/ to Linux binaries, then: npm run package:linux
+
+# Publish both platform VSIXes
+npx @vscode/vsce publish --packagePath nwscript-lsp-win32-x64-VERSION.vsix nwscript-lsp-linux-x64-VERSION.vsix --allow-missing-repository
 ```
+
+### Cross-compilation notes
+- **Linux nwn_script_comp** (bundled compiler): sourced from `D:/tdn/workspace/nwscript-ee-language-server/server/resources/compiler/linux/nwn_script_comp`
+- **Windows nwn_script_comp**: at `bin/win64/nwn_script_comp.exe`
+- **zigbuild**: `cargo-zigbuild` is installed; zig itself is pip-installed (`ziglang` package) with a `.cmd` wrapper at `C:\Users\User\.local\bin\zig.cmd` that delegates to `C:\Users\User\AppData\Roaming\Python\Python313\site-packages\ziglang\zig.exe`
+- **Use `/publish` slash command** for the full build + package + publish workflow
 
 ## Key Design Decisions
 
@@ -99,6 +113,7 @@ npm run package:win      # esbuild bundle + platform-specific VSIX
 - Completion shows ALL workspace symbols (~2700+), not just those from the current include tree
 - Symbols from non-included files get `additional_text_edits` that insert `#include` after the last existing import
 - Each SymbolInfo tracks `include_name` (file stem) for determining what to import
+- **Performance**: uses `for_each_symbol()` to iterate all workspace symbols by reference (no mass clone). The include tree is pre-computed once via `include_tree_set()` — an O(1) HashSet lookup per symbol instead of a recursive tree walk
 
 ### Unused Import Detection (actions.rs)
 - Scans all identifiers in the file (skipping comments and strings)
@@ -152,9 +167,10 @@ Users should also set in their VS Code settings:
 ```
 
 ### Inlay Hints (inlay_hints.rs)
-- Walks the AST to find `Expr::Call` nodes, resolves callee name via `index.find_symbol()` to get parameter names
+- Walks the AST to find `Expr::Call` nodes, resolves callee name to get parameter names
 - Emits `InlayHint` with `InlayHintKind::PARAMETER` at the start of each argument span
 - **Suppression**: skips hints when the argument identifier matches the parameter name (case-insensitive), avoiding redundant hints like `Foo(nCount:` nCount`)`
+- **Performance**: builds a `HashMap<&str, &SymbolInfo>` from `visible_symbols()` once at the start, then does O(1) lookups per call site. Previously called `find_symbol()` per call which walked the entire include tree each time — O(N * include_tree) for N call sites
 - Configurable: `enabled` (default true), `suppressForSingleArgCalls` (default false)
 - Settings flow from VS Code → `initializationOptions.inlayHints` → `InlayHintsSettings` in `NwscriptConfig`
 
@@ -175,7 +191,7 @@ Users should also set in their VS Code settings:
 - Uses `IncludeDecl.path_span` for the link range and `index.resolve_include()` for the target URI
 
 ### Code Lens (code_lens.rs)
-- Shows "N references" above function definitions and struct declarations
+- Shows "N references" above function definitions, struct declarations, and global variable/constant declarations
 - **Batch reference counting** — collects all symbol names in the file, then scans the workspace once for all of them via `count_references_batch()`. This is O(total_source) regardless of how many functions the file has, vs. O(N * total_source) for individual counting
 - **Pre-resolved** — lenses are returned with commands already filled in from `textDocument/codeLens`, so `codeLens/resolve` is a no-op
 - Subtracts declaration count from the total for actual usage count
@@ -189,9 +205,10 @@ Users should also set in their VS Code settings:
 - Produces `DiagnosticTag::UNNECESSARY` hints (grayed out) + quickfix code actions to remove variable declarations
 - Parameters get diagnostics but no removal quickfix (removing a param breaks the function signature)
 
-### Constant Value Hover
+### Initializer Value Hover
 - `SymbolInfo.initializer_text` stores the raw expression text from `VarDecl.initializer`
-- Hover for constants now shows `const int NAME = VALUE` instead of just `const int NAME`
+- Hover for constants shows `const int NAME = VALUE` instead of just `const int NAME`
+- Hover for global variables also shows initializer values (e.g. `int TRUE = 1` for nwscript.nss constants that lack the `const` keyword)
 
 ## Important Notes
 
@@ -199,4 +216,7 @@ Users should also set in their VS Code settings:
 - **nwscript.nss special handling** — it's the only file searched outside normal source dirs. It's also the only file implicitly included in every file's visible symbols
 - **`is_definition` flag** — SymbolInfo tracks whether a function has a body. Goto-definition always prefers implementations over forward declarations
 - **Diagnostic merging** — parser diagnostics (on keystroke), compiler diagnostics (on save), unused-import hints, and unused-variable hints are all merged and published together. Compiler diags are cleared on edit to prevent stale errors
-- **Unused function analysis is deferred** — unlike import/variable analysis (fast, file-local), unused function detection requires a full workspace scan. It only runs on `did_open` and `did_save`, with results cached in `unused_fn_diags`/`unused_fn_actions` DashMaps. Cache is cleared on edit so stale hints disappear until next save. Uses `count_references_batch()` for O(total_source) instead of O(N * total_source)
+- **Unused function analysis is deferred** — unlike import/variable analysis (fast, file-local), unused function detection requires a full workspace scan. It runs on `did_open` (after initial diagnostics publish) and `did_save`, with results cached in `unused_fn_diags`/`unused_fn_actions` DashMaps. Cache is cleared on edit so stale hints disappear until next save. Uses `count_references_batch()` for O(total_source) instead of O(N * total_source)
+- **Code action caching** — import and variable analysis results are cached in `cached_actions` DashMap during `publish_diagnostics_for`. The `code_action` handler reads from cache instead of recomputing, making lightbulb/quickfix responses instant
+- **did_change is lightweight** — only processes the changed file. Does NOT loop over other open documents (rename already sends `didChange` per affected file via WorkspaceEdit)
+- **Batch reference counting** — `count_references_batch()` in references.rs scans each file once for all symbol names via single-pass identifier extraction with `HashSet` lookup. Used by code lens and unused function detection. Complexity is O(total_source_size) regardless of how many symbols are being counted
