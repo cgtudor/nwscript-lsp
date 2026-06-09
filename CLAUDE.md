@@ -22,6 +22,8 @@ crates/
       document.rs  # Open document tracking
       diagnostics.rs  # External compiler (nwn_script_comp) integration
       nasher.rs    # nasher.cfg parser for source directory discovery
+      keybif.rs    # KEY/BIF file reader for extracting vanilla scripts from NWN install
+      nwn_install.rs # NWN:EE installation auto-detection (Steam, Beamdog, GOG, env var)
       providers/
         completion.rs  # Completion with auto-import (all workspace symbols)
         definition.rs  # Goto-definition (prefers implementations over prototypes)
@@ -43,7 +45,7 @@ bin/
 # Check compilation (fast)
 cargo check
 
-# Run all tests (24 tests: lexer, parser, signature, nasher, integration)
+# Run all tests (57 tests: lexer, parser, formatter, signature, nasher, integration)
 cargo test
 
 # Build release binary
@@ -52,7 +54,7 @@ cargo build --release -p nwscript-lsp
 # Package VS Code extension (requires npm install first)
 cd editors/vscode
 npm install
-npx tsc -p ./
+npm run package          # esbuild bundle + minify
 cp ../../target/release/nwscript-lsp.exe bin/
 npx @vscode/vsce package --allow-missing-repository
 ```
@@ -67,10 +69,18 @@ npx @vscode/vsce package --allow-missing-repository
 - **Zero dependencies** — the parser crate has no external deps
 
 ### Workspace Index (index.rs)
-- **Implicit nwscript.nss** — engine built-in functions are always visible even without `#include`. Found via recursive search from workspace roots (lives in `docs/nwn_source/`)
+- **Implicit nwscript.nss** — engine built-in functions are always visible even without `#include`. Auto-discovered via recursive search from workspace roots, or set explicitly via `nwscriptNssPath` config
 - **URI normalization** — all URI lookups go through `normalize_uri()` to fix Windows drive letter case mismatch (`d:` vs `D:`)
 - **Latin-1 fallback** — files that fail UTF-8 decoding are read as Latin-1 (BioWare-era scripts use Windows-1252)
-- **Directory skip list** — `docs/`, `nwn_source/`, `.hidden/`, `node_modules/`, `target/` are skipped during scanning to avoid indexing reference material as source
+- **Configurable directory exclusion** — dot-prefixed directories are always skipped. Additional names come from the `excludeDirs` config setting (defaults: `node_modules`, `target`, `build`, `output`). The `nwscript.nss` auto-discovery search ignores the exclude list so it can find the file in directories like `docs/`
+
+### Vanilla Script Extraction (keybif.rs, nwn_install.rs)
+- **NWN installation auto-detection** — checks `nwnRoot` config, then `NWN_ROOT` env var, then Steam/Beamdog/GOG common paths (platform-specific)
+- **KEY/BIF reading** — parses all KEY files in `<nwn_root>/data/` (`nwn_base.key`, `nwn_base_loc.key`, `nwn_retail.key`, `nwn_retail_loc.key`), resolves BIF references, extracts all ResType 2009 (.nss) resources
+- **V1 and E1 format support** — handles both original NWN (V1) and Enhanced Edition (E1) formats. E1 adds optional CompressedBuf wrapper with zstd/zlib decompression
+- **Cache directory** — extracted vanilla `.nss` files are written to `<cache_dir>/nwscript-lsp/vanilla/`. On Windows this is `%LOCALAPPDATA%/nwscript-lsp/vanilla/`
+- **Override priority** — vanilla scripts are indexed FIRST (phase 1), then workspace files (phase 2). Since `include_map` uses last-write-wins, workspace files naturally override vanilla. This matches the game engine's override behavior
+- **Go-to-definition** — jumping to a vanilla function opens the cached extracted file, similar to how C# IDEs show decompiled library sources
 
 ### Compiler Diagnostics (diagnostics.rs)
 - **Nasher cache compilation** — writes current source INTO the nasher cache (`.nasher/cache/<target>/`), compiles from there, then restores the original. This matches how nasher itself compiles and ensures the compiler's resman resolves workspace overrides correctly over NWN key/bif files
@@ -116,7 +126,9 @@ crates/lsp/src/providers/
 - Configuration flows from VS Code settings → `initializationOptions.formatter` → `FormatterSettings` → `FormatConfig`
 
 #### VS Code Settings
-All under `nwscriptLsp.formatter.*`: `maxLineWidth` (120), `braceStyle` (nextLine/sameLine), `sortIncludes` (true), `maxBlankLines` (1), `trimTrailingWhitespace` (true), `spaceAfterKeywords` (true), `spaceInsideParens` (false), `spaceAroundOperators` (true), `spaceAfterComma` (true)
+General settings: `compilerPath`, `serverPath`, `nwnRoot` (NWN:EE install path, auto-detected), `nwscriptNssPath`, `includeDirs`, `excludeDirs` (defaults: `["node_modules", "target", "build", "output"]`)
+
+Formatter settings under `nwscriptLsp.formatter.*`: `maxLineWidth` (120), `braceStyle` (nextLine/sameLine), `sortIncludes` (true), `maxBlankLines` (1), `trimTrailingWhitespace` (true), `spaceAfterKeywords` (true), `spaceInsideParens` (false), `spaceAroundOperators` (true), `spaceAfterComma` (true)
 
 Users should also set in their VS Code settings:
 ```json
@@ -124,7 +136,7 @@ Users should also set in their VS Code settings:
     "[nwscript]": {
         "editor.formatOnSave": true,
         "editor.formatOnType": true,
-        "editor.defaultFormatter": "tdn.nwscript-lsp"
+        "editor.defaultFormatter": "Megalomaniac.nwscript-lsp"
     }
 }
 ```

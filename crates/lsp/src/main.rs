@@ -4,7 +4,9 @@ use tracing_subscriber::EnvFilter;
 mod diagnostics;
 mod document;
 mod index;
+mod keybif;
 mod nasher;
+mod nwn_install;
 mod providers;
 mod server;
 

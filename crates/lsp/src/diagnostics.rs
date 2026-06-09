@@ -181,15 +181,15 @@ pub fn find_nasher_cache(workspace_dirs: &[PathBuf]) -> Option<PathBuf> {
 }
 
 /// Collect all directories containing .nss files under the given roots.
-pub fn collect_nss_directories(roots: &[PathBuf]) -> Vec<PathBuf> {
+pub fn collect_nss_directories(roots: &[PathBuf], exclude_dirs: &[String]) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for root in roots {
-        collect_dirs_recursive(root, &mut dirs);
+        collect_dirs_recursive(root, exclude_dirs, &mut dirs);
     }
     dirs
 }
 
-fn collect_dirs_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect_dirs_recursive(dir: &Path, exclude_dirs: &[String], out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -200,14 +200,11 @@ fn collect_dirs_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
         if path.is_dir() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with('.')
-                || name == "docs"
-                || name == "nwn_source"
-                || name == "node_modules"
-                || name == "target"
+                || exclude_dirs.iter().any(|d| d.eq_ignore_ascii_case(name))
             {
                 continue;
             }
-            collect_dirs_recursive(&path, out);
+            collect_dirs_recursive(&path, exclude_dirs, out);
         } else if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("nss")) {
             has_nss = true;
         }

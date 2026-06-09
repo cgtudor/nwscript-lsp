@@ -1,15 +1,18 @@
 {
   "name": "nwscript-lsp",
   "displayName": "NWScript Language Server",
-  "description": "Language server for NWScript (Neverwinter Nights scripting language)",
+  "description": "Language server for NWScript (Neverwinter Nights scripting language) — completions, diagnostics, go-to-definition, hover, formatting, and more.",
   "version": "0.1.0",
-  "publisher": "tdn",
+  "publisher": "Megalomaniac",
   "license": "MIT",
+  "icon": "icon.png",
   "engines": {
     "vscode": "^1.75.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Formatters",
+    "Linters"
   ],
   "activationEvents": [
     "onLanguage:nwscript"
@@ -26,7 +29,11 @@
         "extensions": [
           ".nss"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icon.png",
+          "dark": "./icon.png"
+        }
       }
     ],
     "grammars": [
@@ -36,18 +43,38 @@
         "path": "./syntaxes/nwscript.tmLanguage.json"
       }
     ],
+    "configurationDefaults": {
+      "[nwscript]": {
+        "editor.defaultFormatter": "Megalomaniac.nwscript-lsp",
+        "editor.formatOnSave": true
+      }
+    },
     "configuration": {
       "title": "NWScript Language Server",
       "properties": {
-        "nwscriptLsp.serverPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to the nwscript-lsp server binary. If empty, uses the bundled binary."
-        },
         "nwscriptLsp.compilerPath": {
           "type": "string",
           "default": "",
-          "description": "Path to nwn_script_comp binary. If empty, uses the bundled binary."
+          "order": 1,
+          "markdownDescription": "Path to the `nwn_script_comp` compiler binary. If empty, uses the bundled binary or searches `PATH`."
+        },
+        "nwscriptLsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "order": 2,
+          "markdownDescription": "Path to the `nwscript-lsp` server binary. If empty, uses the bundled binary or searches `PATH`."
+        },
+        "nwscriptLsp.nwnRoot": {
+          "type": "string",
+          "default": "",
+          "order": 3,
+          "markdownDescription": "Path to NWN:EE installation directory (contains `data/` with KEY/BIF files). If empty, auto-detected from `NWN_ROOT` env var, Steam, Beamdog, or GOG paths. Used to extract vanilla scripts for include resolution and go-to-definition."
+        },
+        "nwscriptLsp.nwscriptNssPath": {
+          "type": "string",
+          "default": "",
+          "order": 4,
+          "markdownDescription": "Path to `nwscript.nss` (engine built-in definitions). If empty, extracted from NWN installation or searched in workspace."
         },
         "nwscriptLsp.includeDirs": {
           "type": "array",
@@ -55,12 +82,22 @@
             "type": "string"
           },
           "default": [],
-          "description": "Additional include directories for NWScript compilation."
+          "order": 5,
+          "markdownDescription": "Additional include directories for NWScript source files. These are added alongside directories discovered from `nasher.cfg`."
         },
-        "nwscriptLsp.formatter.maxLineWidth": {
-          "type": "number",
-          "default": 120,
-          "description": "Maximum line width before wrapping function parameters and arguments."
+        "nwscriptLsp.excludeDirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "node_modules",
+            "target",
+            "build",
+            "output"
+          ],
+          "order": 6,
+          "markdownDescription": "Directory names to exclude from source scanning. Directories starting with `.` are always excluded. Use this to skip folders that contain `.nss` files you don't want indexed (e.g., `docs`, `reference`)."
         },
         "nwscriptLsp.formatter.braceStyle": {
           "type": "string",
@@ -68,50 +105,70 @@
             "nextLine",
             "sameLine"
           ],
+          "enumDescriptions": [
+            "Allman style — opening brace on its own line",
+            "K&R style — opening brace on the same line as the statement"
+          ],
           "default": "nextLine",
-          "description": "Brace placement style. 'nextLine' (Allman) or 'sameLine' (K&R)."
+          "order": 10,
+          "markdownDescription": "Brace placement style."
         },
-        "nwscriptLsp.formatter.sortIncludes": {
-          "type": "boolean",
-          "default": true,
-          "description": "Sort #include directives alphabetically."
+        "nwscriptLsp.formatter.maxLineWidth": {
+          "type": "number",
+          "default": 120,
+          "order": 11,
+          "markdownDescription": "Maximum line width before wrapping function parameters and call arguments to one-per-line."
         },
         "nwscriptLsp.formatter.maxBlankLines": {
           "type": "number",
           "default": 1,
-          "description": "Maximum number of consecutive blank lines allowed."
+          "order": 12,
+          "markdownDescription": "Maximum number of consecutive blank lines allowed. Extra blank lines are collapsed."
+        },
+        "nwscriptLsp.formatter.sortIncludes": {
+          "type": "boolean",
+          "default": true,
+          "order": 13,
+          "markdownDescription": "Sort `#include` directives alphabetically (case-insensitive). Associated comments travel with their include."
         },
         "nwscriptLsp.formatter.trimTrailingWhitespace": {
           "type": "boolean",
           "default": true,
-          "description": "Remove trailing whitespace from lines."
+          "order": 14,
+          "markdownDescription": "Remove trailing whitespace from lines."
         },
         "nwscriptLsp.formatter.spaceAfterKeywords": {
           "type": "boolean",
           "default": true,
-          "description": "Space between keywords and parentheses: 'if (x)' vs 'if(x)'."
+          "order": 15,
+          "markdownDescription": "Space between control keywords and parentheses: `if (x)` vs `if(x)`."
         },
         "nwscriptLsp.formatter.spaceInsideParens": {
           "type": "boolean",
           "default": false,
-          "description": "Spaces inside parentheses: '( x )' vs '(x)'."
+          "order": 16,
+          "markdownDescription": "Spaces inside parentheses: `( x )` vs `(x)`."
         },
         "nwscriptLsp.formatter.spaceAroundOperators": {
           "type": "boolean",
           "default": true,
-          "description": "Spaces around binary operators: 'a + b' vs 'a+b'."
+          "order": 17,
+          "markdownDescription": "Spaces around binary operators: `a + b` vs `a+b`."
         },
         "nwscriptLsp.formatter.spaceAfterComma": {
           "type": "boolean",
           "default": true,
-          "description": "Space after commas: 'f(a, b)' vs 'f(a,b)'."
+          "order": 18,
+          "markdownDescription": "Space after commas in parameter lists and arguments: `f(a, b)` vs `f(a,b)`."
         }
       }
     }
   },
   "scripts": {
-    "build": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "build": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "build:check": "tsc -p ./ --noEmit",
+    "watch": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
+    "package": "npm run build -- --minify"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -119,6 +176,7 @@
   "devDependencies": {
     "@types/node": "^25.9.2",
     "@types/vscode": "^1.75.0",
+    "esbuild": "^0.28.0",
     "typescript": "^5.0.0"
   }
 }

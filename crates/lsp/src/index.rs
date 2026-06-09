@@ -28,6 +28,8 @@ pub struct WorkspaceIndex {
     source_dirs: Vec<PathBuf>,
     /// Broader search roots (workspace dirs + source dir parents) for special files.
     search_roots: Vec<PathBuf>,
+    /// Directory names to skip when scanning (dot-prefixed dirs are always skipped).
+    exclude_dirs: Vec<String>,
 }
 
 /// A parsed and indexed .nss file.
@@ -84,7 +86,11 @@ pub enum SymbolKind {
 }
 
 impl WorkspaceIndex {
-    pub fn new(source_dirs: Vec<PathBuf>, workspace_dirs: Vec<PathBuf>) -> Self {
+    pub fn new(
+        source_dirs: Vec<PathBuf>,
+        workspace_dirs: Vec<PathBuf>,
+        exclude_dirs: Vec<String>,
+    ) -> Self {
         // Collect all root dirs to search for special files like nwscript.nss.
         // Includes workspace roots AND parents of source dirs.
         let mut search_roots = workspace_dirs;
@@ -102,24 +108,56 @@ impl WorkspaceIndex {
             include_map: DashMap::new(),
             source_dirs,
             search_roots,
+            exclude_dirs,
         }
     }
 
     /// Scan all source directories and index every .nss file found.
-    pub fn scan_workspace(&self) {
+    ///
+    /// If `nwscript_nss_path` is provided, it is used directly instead of
+    /// searching for `nwscript.nss` recursively.
+    ///
+    /// If `vanilla_cache_dir` is provided, vanilla scripts from KEY/BIF are
+    /// indexed first at lowest priority — workspace files override them.
+    pub fn scan_workspace(
+        &self,
+        nwscript_nss_path: Option<&Path>,
+        vanilla_cache_dir: Option<&Path>,
+    ) {
+        // Phase 1: Index vanilla scripts from KEY/BIF cache (lowest priority).
+        // These get overridden by workspace files indexed in phase 2.
+        if let Some(cache_dir) = vanilla_cache_dir {
+            let mut vanilla_files = Vec::new();
+            collect_nss_files(cache_dir, &[], &mut vanilla_files);
+            tracing::info!("indexing {} vanilla .nss files from KEY/BIF", vanilla_files.len());
+            for path in vanilla_files {
+                if let Err(e) = self.index_file_from_disk(&path) {
+                    tracing::warn!("failed to index vanilla {}: {e}", path.display());
+                }
+            }
+        }
+
+        // Phase 2: Index workspace files (override vanilla).
         let mut nss_files = Vec::new();
 
         for dir in &self.source_dirs {
-            collect_nss_files(dir, &mut nss_files);
+            collect_nss_files(dir, &self.exclude_dirs, &mut nss_files);
         }
 
-        // Also find nwscript.nss specifically (the engine built-in definitions).
-        // It may live in a docs/ or reference directory outside source dirs.
-        for dir in &self.search_roots {
-            find_file_recursive(dir, "nwscript.nss", &mut nss_files);
+        // Find nwscript.nss (the engine built-in definitions).
+        // If we already got it from vanilla cache, workspace copy still overrides.
+        if let Some(explicit_path) = nwscript_nss_path {
+            if explicit_path.exists() && !nss_files.contains(&explicit_path.to_path_buf()) {
+                nss_files.push(explicit_path.to_path_buf());
+            }
+        } else if vanilla_cache_dir.is_none() {
+            // Only auto-discover if we didn't get it from vanilla extraction
+            for dir in &self.search_roots {
+                find_file_recursive(dir, "nwscript.nss", &mut nss_files);
+            }
         }
 
-        tracing::info!("indexing {} .nss files", nss_files.len());
+        tracing::info!("indexing {} workspace .nss files", nss_files.len());
 
         for path in nss_files {
             if let Err(e) = self.index_file_from_disk(&path) {
@@ -483,12 +521,9 @@ fn find_leading_comment(source: &str, span: nwscript_parser::Span) -> Option<Str
 // =============================================================================
 
 /// Directories to skip when scanning for .nss files.
-fn should_skip_dir(name: &str) -> bool {
-    name.starts_with('.')
-        || name == "docs"
-        || name == "nwn_source"
-        || name == "node_modules"
-        || name == "target"
+/// Dot-prefixed directories are always skipped. Additional names come from config.
+fn should_skip_dir(name: &str, exclude_dirs: &[String]) -> bool {
+    name.starts_with('.') || exclude_dirs.iter().any(|d| d.eq_ignore_ascii_case(name))
 }
 
 /// Read a file, trying UTF-8 first, falling back to Latin-1/Windows-1252.
@@ -526,7 +561,7 @@ fn find_file_recursive(dir: &Path, target: &str, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn collect_nss_files(dir: &Path, out: &mut Vec<PathBuf>) {
+fn collect_nss_files(dir: &Path, exclude_dirs: &[String], out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -535,10 +570,10 @@ fn collect_nss_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if should_skip_dir(name) {
+            if should_skip_dir(name, exclude_dirs) {
                 continue;
             }
-            collect_nss_files(&path, out);
+            collect_nss_files(&path, exclude_dirs, out);
         } else if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("nss")) {
             out.push(path);
         }

@@ -17,6 +17,15 @@ use crate::providers;
 pub struct NwscriptConfig {
     pub compiler_path: Option<String>,
     pub include_dirs: Option<Vec<String>>,
+    /// Directory names to exclude from source scanning
+    /// (dot-prefixed directories are always excluded).
+    pub exclude_dirs: Option<Vec<String>>,
+    /// Explicit path to nwscript.nss (engine built-in definitions).
+    /// If empty/None, the LSP searches workspace directories recursively.
+    pub nwscript_nss_path: Option<String>,
+    /// Path to NWN:EE installation directory (contains data/ with KEY/BIF files).
+    /// If empty/None, auto-detected from NWN_ROOT env var, Steam, Beamdog, or GOG.
+    pub nwn_root: Option<String>,
     #[serde(default)]
     pub formatter: providers::formatting::FormatterSettings,
 }
@@ -57,9 +66,11 @@ impl NwscriptLanguageServer {
             source_dirs.append(&mut dirs);
         }
 
-        // Also add any extra include dirs from config
-        {
+        // Read config settings
+        let (exclude_dirs, nwscript_nss_path, nwn_root_setting) = {
             let config = self.config.read().unwrap();
+
+            // Also add any extra include dirs from config
             if let Some(extra) = &config.include_dirs {
                 for dir in extra {
                     let p = PathBuf::from(dir);
@@ -68,7 +79,34 @@ impl NwscriptLanguageServer {
                     }
                 }
             }
-        }
+
+            let exclude = config
+                .exclude_dirs
+                .clone()
+                .unwrap_or_else(default_exclude_dirs);
+
+            let nss_path = config
+                .nwscript_nss_path
+                .as_ref()
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from);
+
+            let nwn_root = config
+                .nwn_root
+                .as_ref()
+                .filter(|p| !p.is_empty())
+                .map(|s| s.as_str())
+                .map(String::from);
+
+            (exclude, nss_path, nwn_root)
+        };
+
+        tracing::info!("exclude dirs: {:?}", exclude_dirs);
+
+        // Extract vanilla .nss scripts from NWN:EE installation KEY/BIF files.
+        // These are written to a cache directory and indexed at lowest priority
+        // (workspace files override them).
+        let vanilla_cache_dir = extract_vanilla_scripts(nwn_root_setting.as_deref());
 
         // Find nasher cache for compiler diagnostics (preferred over --dirs).
         // Search both workspace dirs and parents of source dirs (nasher.cfg is
@@ -96,12 +134,14 @@ impl NwscriptLanguageServer {
         *self.nasher_cache.write().unwrap() = nasher_cache;
 
         // Fallback: collect all directories containing .nss files
-        let nss_dirs = crate::diagnostics::collect_nss_directories(&source_dirs);
+        let nss_dirs =
+            crate::diagnostics::collect_nss_directories(&source_dirs, &exclude_dirs);
         tracing::info!("found {} directories containing .nss files", nss_dirs.len());
         *self.nss_dirs.write().unwrap() = nss_dirs;
 
-        let index = WorkspaceIndex::new(source_dirs, workspace_dirs.to_vec());
-        index.scan_workspace();
+        let index =
+            WorkspaceIndex::new(source_dirs, workspace_dirs.to_vec(), exclude_dirs);
+        index.scan_workspace(nwscript_nss_path.as_deref(), vanilla_cache_dir.as_deref());
 
         *self.index.write().unwrap() = Some(index);
     }
@@ -567,4 +607,56 @@ fn find_bundled_compiler() -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Default directory names to exclude from source scanning.
+fn default_exclude_dirs() -> Vec<String> {
+    ["node_modules", "target", "build", "output"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Extract vanilla .nss scripts from the NWN:EE installation into a cache dir.
+///
+/// Returns the cache directory path if extraction succeeded.
+fn extract_vanilla_scripts(nwn_root_setting: Option<&str>) -> Option<PathBuf> {
+    let nwn_root = crate::nwn_install::find_nwn_root(nwn_root_setting)?;
+    tracing::info!("NWN:EE installation found: {}", nwn_root.display());
+
+    let cache_dir = dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("nwscript-lsp")
+        .join("vanilla");
+
+    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+        tracing::warn!("failed to create vanilla cache dir: {e}");
+        return None;
+    }
+
+    match crate::keybif::extract_nss_from_install(&nwn_root) {
+        Ok(resources) => {
+            let count = resources.len();
+            for res in resources {
+                let filename = format!("{}.nss", res.resref);
+                let dest = cache_dir.join(&filename);
+                // Convert to string (most .nss files are ASCII/Latin-1)
+                let text = String::from_utf8(res.data.clone())
+                    .unwrap_or_else(|_| res.data.iter().map(|&b| b as char).collect());
+                if let Err(e) = std::fs::write(&dest, &text) {
+                    tracing::warn!("failed to write {}: {e}", filename);
+                }
+            }
+            tracing::info!(
+                "extracted {} vanilla .nss scripts to {}",
+                count,
+                cache_dir.display()
+            );
+            Some(cache_dir)
+        }
+        Err(e) => {
+            tracing::warn!("failed to extract vanilla scripts: {e}");
+            None
+        }
+    }
 }

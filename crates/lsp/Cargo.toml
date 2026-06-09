@@ -19,3 +19,6 @@ dashmap = "6"
 ropey = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zstd = "0.13"
+flate2 = "1"
+dirs = "6"
