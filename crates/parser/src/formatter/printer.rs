@@ -299,9 +299,11 @@ impl<'a> Printer<'a> {
 
         // Format remaining declarations
         let is_first_decl = includes.is_empty();
+        let mut prev_was_var = false;
         for (i, decl) in others.iter().enumerate() {
             let is_first = is_first_decl && i == 0;
-            self.format_declaration(decl, is_first);
+            self.format_declaration(decl, is_first, prev_was_var);
+            prev_was_var = matches!(decl, Declaration::GlobalVar(_));
         }
 
         self.emit_trailing_trivia();
@@ -394,15 +396,33 @@ impl<'a> Printer<'a> {
         }
     }
 
-    fn format_declaration(&mut self, decl: &Declaration, is_first: bool) {
+    fn format_declaration(
+        &mut self,
+        decl: &Declaration,
+        is_first: bool,
+        prev_was_var: bool,
+    ) {
         let trivia = self.collect_comments_before(decl.span().start);
 
         // 1) Emit any trailing comments from the previous declaration
         self.emit_trailing_comments(&trivia.comments);
 
-        // 2) Blank line separator between declarations (not before the first)
+        // 2) Blank line separator between declarations (not before the first).
+        //    For consecutive variable/constant declarations, only add a blank
+        //    line if the user had one (preserves intentional grouping).
+        //    For functions and structs, always separate with a blank line.
+        let is_var = matches!(decl, Declaration::GlobalVar(_));
         if !is_first {
-            self.blank_line();
+            if prev_was_var && is_var {
+                // Consecutive variable decls: always a newline, but only add an
+                // extra blank line if the user had one (preserves grouping).
+                self.newline();
+                if trivia.had_blank_lines {
+                    self.newline(); // blank line between groups
+                }
+            } else {
+                self.blank_line();
+            }
         }
 
         // 3) Emit leading comments

@@ -465,10 +465,15 @@ fn format_includes_with_header_comment() {
 
 #[test]
 fn format_multiple_declarations_separated() {
+    // Consecutive vars without blank lines in source: no blank line inserted
     let input = "const int A=1;const int B=2;void Func(){return;}";
     let result = fmt(input);
-    // Each declaration should have a blank line between them
-    assert!(result.contains("const int A = 1;\n\nconst int B = 2;\n\nvoid Func()"));
+    assert!(result.contains("const int A = 1;\nconst int B = 2;\n\nvoid Func()"));
+
+    // Consecutive vars WITH blank line in source: blank line preserved
+    let input2 = "const int A=1;\n\nconst int B=2;void Func(){return;}";
+    let result2 = fmt(input2);
+    assert!(result2.contains("const int A = 1;\n\nconst int B = 2;\n\nvoid Func()"));
 }
 
 // =============================================================================
