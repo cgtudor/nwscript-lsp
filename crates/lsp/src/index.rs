@@ -300,6 +300,53 @@ impl WorkspaceIndex {
         symbols
     }
 
+    /// Collect all include names in the transitive include tree of `uri`.
+    /// Returns a set of lowercased include names that are reachable.
+    pub fn include_tree_set(&self, uri: &Url) -> HashSet<String> {
+        let uri = normalize_uri(uri);
+        let mut visited = HashSet::new();
+        let mut include_names = HashSet::new();
+        self.collect_include_tree(&uri, &mut visited, &mut include_names);
+        // nwscript.nss is always implicitly included
+        include_names.insert("nwscript".to_string());
+        include_names
+    }
+
+    fn collect_include_tree(
+        &self,
+        uri: &Url,
+        visited: &mut HashSet<Url>,
+        include_names: &mut HashSet<String>,
+    ) {
+        if !visited.insert(uri.clone()) {
+            return;
+        }
+        let Some(file) = self.get_file(uri) else {
+            return;
+        };
+        if let Some(stem) = file.path.file_stem().and_then(|s| s.to_str()) {
+            include_names.insert(stem.to_lowercase());
+        }
+        for inc in &file.includes {
+            include_names.insert(inc.to_lowercase());
+            if let Some(inc_uri) = self.resolve_include(inc) {
+                self.collect_include_tree(&inc_uri, visited, include_names);
+            }
+        }
+    }
+
+    /// Call a closure for each symbol across all indexed files, without cloning.
+    pub fn for_each_symbol<F>(&self, mut f: F)
+    where
+        F: FnMut(&SymbolInfo),
+    {
+        for entry in self.files.iter() {
+            for sym in &entry.value().symbols {
+                f(sym);
+            }
+        }
+    }
+
     /// Check if a file (by include name) is in the transitive include tree of `uri`.
     pub fn is_in_include_tree(&self, uri: &Url, include_name: &str) -> bool {
         let uri = normalize_uri(uri);

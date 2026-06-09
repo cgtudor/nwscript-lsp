@@ -50,6 +50,16 @@ pub fn code_lenses(
                     range,
                 });
             }
+            Declaration::GlobalVar(v) => {
+                let Some(name) = &v.name else { continue };
+                let (line, col) = line_index.line_col(name.span.start);
+                let range = Range::new(Position::new(line, col), Position::new(line, col));
+                candidates.push(LensCandidate {
+                    name: name.name.clone(),
+                    decl_count: 1,
+                    range,
+                });
+            }
             _ => {}
         }
     }

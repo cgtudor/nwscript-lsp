@@ -62,6 +62,8 @@ pub struct NwscriptLanguageServer {
     unused_fn_diags: DashMap<Url, Vec<Diagnostic>>,
     /// Cached unused-function code actions per file (computed on open/save, cleared on edit).
     unused_fn_actions: DashMap<Url, Vec<CodeAction>>,
+    /// Cached import + variable code actions per file (computed with diagnostics, cleared on edit).
+    cached_actions: DashMap<Url, Vec<CodeAction>>,
 }
 
 impl NwscriptLanguageServer {
@@ -78,6 +80,7 @@ impl NwscriptLanguageServer {
             compiler_diags: DashMap::new(),
             unused_fn_diags: DashMap::new(),
             unused_fn_actions: DashMap::new(),
+            cached_actions: DashMap::new(),
         }
     }
 
@@ -236,21 +239,27 @@ impl NwscriptLanguageServer {
             diagnostics.extend(compiler.value().iter().cloned());
         }
 
-        // Unused import diagnostics (grayed out with Unnecessary tag)
+        // Unused import + variable diagnostics (grayed out with Unnecessary tag)
+        // Also cache the corresponding code actions so code_action handler is instant.
         {
             let guard = self.index.read().unwrap();
+            let mut file_actions: Vec<CodeAction> = Vec::new();
+
             if let Some(index) = guard.as_ref() {
                 let analysis = providers::actions::analyze_imports(
                     index, uri, &doc.parsed, &doc.source, &doc.line_index,
                 );
                 diagnostics.extend(analysis.diagnostics);
-
-                // Unused variable diagnostics (grayed out with Unnecessary tag)
-                let var_analysis = providers::actions::analyze_unused_variables(
-                    &doc.parsed, &doc.source, &doc.line_index, uri,
-                );
-                diagnostics.extend(var_analysis.diagnostics);
+                file_actions.extend(analysis.actions);
             }
+
+            let var_analysis = providers::actions::analyze_unused_variables(
+                &doc.parsed, &doc.source, &doc.line_index, uri,
+            );
+            diagnostics.extend(var_analysis.diagnostics);
+            file_actions.extend(var_analysis.actions);
+
+            self.cached_actions.insert(uri.clone(), file_actions);
         }
 
         // Unused function diagnostics (from cache, computed on open/save)
@@ -466,6 +475,9 @@ impl LanguageServer for NwscriptLanguageServer {
         let text = params.text_document.text;
 
         self.documents.open(uri.clone(), version, text);
+        self.publish_diagnostics_for(&uri, false).await;
+        // Compute unused function diagnostics after initial publish so basic
+        // intellisense (parser errors, imports, variables) appears immediately.
         self.compute_unused_functions(&uri);
         self.publish_diagnostics_for(&uri, false).await;
     }
@@ -480,14 +492,6 @@ impl LanguageServer for NwscriptLanguageServer {
             self.unused_fn_diags.remove(&uri);
             self.unused_fn_actions.remove(&uri);
             self.publish_diagnostics_for(&uri, true).await;
-
-            // Also refresh diagnostics for other open documents so cross-file
-            // changes (e.g., from rename) are reflected immediately.
-            for other_uri in self.documents.all_uris() {
-                if other_uri != uri {
-                    self.publish_diagnostics_for(&other_uri, false).await;
-                }
-            }
         }
     }
 
@@ -502,6 +506,7 @@ impl LanguageServer for NwscriptLanguageServer {
         self.compiler_diags.remove(&uri);
         self.unused_fn_diags.remove(&uri);
         self.unused_fn_actions.remove(&uri);
+        self.cached_actions.remove(&uri);
         self.client
             .publish_diagnostics(uri, vec![], None)
             .await;
@@ -826,27 +831,14 @@ impl LanguageServer for NwscriptLanguageServer {
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = &params.text_document.uri;
         let request_range = params.range;
-        let Some(doc) = self.documents.get(uri) else {
-            return Ok(None);
-        };
 
-        let guard = self.index.read().unwrap();
+        // All actions are pre-computed and cached: import + variable actions
+        // from publish_diagnostics_for, unused function actions from compute_unused_functions.
         let mut all_actions: Vec<CodeAction> = Vec::new();
 
-        if let Some(index) = guard.as_ref() {
-            let analysis = providers::actions::analyze_imports(
-                index, uri, &doc.parsed, &doc.source, &doc.line_index,
-            );
-            all_actions.extend(analysis.actions);
+        if let Some(actions) = self.cached_actions.get(uri) {
+            all_actions.extend(actions.value().iter().cloned());
         }
-
-        // Unused variable quickfix actions
-        let var_analysis = providers::actions::analyze_unused_variables(
-            &doc.parsed, &doc.source, &doc.line_index, uri,
-        );
-        all_actions.extend(var_analysis.actions);
-
-        // Unused function quickfix actions (from cache, computed on open/save)
         if let Some(fn_actions) = self.unused_fn_actions.get(uri) {
             all_actions.extend(fn_actions.value().iter().cloned());
         }

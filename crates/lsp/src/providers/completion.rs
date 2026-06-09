@@ -16,14 +16,10 @@ pub fn completions_from_index(
     line_index: &LineIndex,
     cursor_offset: u32,
 ) -> Vec<CompletionItem> {
-    let visible = index.visible_symbols(uri);
-    let all = index.all_workspace_symbols();
-
     let mut items = Vec::new();
     let mut seen = HashSet::new();
 
     // First: local variables and function parameters (highest priority).
-    // These sort first because sort_text starts with "0".
     let locals = collect_locals(parsed, cursor_offset);
     for local in &locals {
         if !seen.insert(local.name.clone()) {
@@ -38,41 +34,34 @@ pub fn completions_from_index(
         });
     }
 
-    // Then add visible symbols (no import needed)
-    for sym in &visible {
-        if sym.kind == SymbolKind::StructField {
-            continue;
-        }
-        if !seen.insert(sym.name.clone()) {
-            continue;
-        }
-        items.push(symbol_to_completion(sym, None));
-    }
-
-    // Then add workspace symbols not yet visible (need auto-import)
+    // Pre-compute the include tree set once (instead of per-symbol).
+    let include_tree = index.include_tree_set(uri);
     let import_insert_pos = find_import_insert_position(parsed, line_index);
-    for sym in &all {
+
+    // Iterate all workspace symbols by reference (no mass clone).
+    // Symbols in the include tree are "visible" (sort priority 1_),
+    // others need auto-import (sort priority 2_).
+    index.for_each_symbol(|sym| {
         if sym.kind == SymbolKind::StructField {
-            continue;
+            return;
         }
         if !seen.insert(sym.name.clone()) {
-            continue;
+            return;
         }
-        // This symbol is not visible — needs an import
-        let needs_import = !sym.include_name.is_empty()
-            && !sym.include_name.eq_ignore_ascii_case("nwscript")
-            && !index.is_in_include_tree(uri, &sym.include_name);
 
-        if needs_import {
+        let in_tree = sym.include_name.is_empty()
+            || include_tree.contains(&sym.include_name.to_lowercase());
+
+        if in_tree {
+            items.push(symbol_to_completion(sym, None));
+        } else {
             let import_edit = TextEdit {
                 range: Range::new(import_insert_pos, import_insert_pos),
                 new_text: format!("#include \"{}\"\n", sym.include_name),
             };
             items.push(symbol_to_completion(sym, Some(import_edit)));
-        } else {
-            items.push(symbol_to_completion(sym, None));
         }
-    }
+    });
 
     items
 }

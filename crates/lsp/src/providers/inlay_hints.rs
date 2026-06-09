@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use nwscript_parser::ast::*;
 use nwscript_parser::{LineIndex, ParsedFile};
 use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Position, Url};
 
-use crate::index::WorkspaceIndex;
+use crate::index::{SymbolInfo, WorkspaceIndex};
 
 /// Compute parameter name inlay hints for a file.
 pub fn inlay_hints(
@@ -12,10 +14,22 @@ pub fn inlay_hints(
     uri: &Url,
     suppress_single_arg: bool,
 ) -> Vec<InlayHint> {
+    // Build a symbol lookup map ONCE instead of walking the include tree per call.
+    let visible = index.visible_symbols(uri);
+    let mut symbol_map: HashMap<&str, &SymbolInfo> = HashMap::new();
+    for sym in &visible {
+        // Prefer definitions over prototypes
+        let dominated = symbol_map
+            .get(sym.name.as_str())
+            .map_or(false, |existing| existing.is_definition);
+        if !dominated {
+            symbol_map.insert(&sym.name, sym);
+        }
+    }
+
     let mut collector = HintCollector {
         line_index,
-        index,
-        uri,
+        symbol_map: &symbol_map,
         suppress_single_arg,
         hints: Vec::new(),
     };
@@ -29,8 +43,7 @@ pub fn inlay_hints(
 
 struct HintCollector<'a> {
     line_index: &'a LineIndex,
-    index: &'a WorkspaceIndex,
-    uri: &'a Url,
+    symbol_map: &'a HashMap<&'a str, &'a SymbolInfo>,
     suppress_single_arg: bool,
     hints: Vec<InlayHint>,
 }
@@ -172,8 +185,8 @@ impl<'a> HintCollector<'a> {
             _ => return,
         };
 
-        // Look up the function in the index
-        let Some(sym) = self.index.find_symbol(self.uri, callee_name) else {
+        // Look up the function in the pre-built symbol map (O(1) instead of include-tree walk)
+        let Some(sym) = self.symbol_map.get(callee_name.as_str()) else {
             return;
         };
         let Some(params) = &sym.params else {
