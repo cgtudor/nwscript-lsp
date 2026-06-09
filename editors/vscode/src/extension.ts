@@ -46,6 +46,17 @@ export function activate(context: ExtensionContext) {
     initializationOptions: {
       compilerPath: config.get<string>("compilerPath", ""),
       includeDirs: config.get<string[]>("includeDirs", []),
+      formatter: {
+        maxLineWidth: config.get<number>("formatter.maxLineWidth"),
+        braceStyle: config.get<string>("formatter.braceStyle"),
+        sortIncludes: config.get<boolean>("formatter.sortIncludes"),
+        maxBlankLines: config.get<number>("formatter.maxBlankLines"),
+        trimTrailingWhitespace: config.get<boolean>("formatter.trimTrailingWhitespace"),
+        spaceAfterKeywords: config.get<boolean>("formatter.spaceAfterKeywords"),
+        spaceInsideParens: config.get<boolean>("formatter.spaceInsideParens"),
+        spaceAroundOperators: config.get<boolean>("formatter.spaceAroundOperators"),
+        spaceAfterComma: config.get<boolean>("formatter.spaceAfterComma"),
+      },
     },
   };
 

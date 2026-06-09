@@ -56,6 +56,55 @@
           },
           "default": [],
           "description": "Additional include directories for NWScript compilation."
+        },
+        "nwscriptLsp.formatter.maxLineWidth": {
+          "type": "number",
+          "default": 120,
+          "description": "Maximum line width before wrapping function parameters and arguments."
+        },
+        "nwscriptLsp.formatter.braceStyle": {
+          "type": "string",
+          "enum": [
+            "nextLine",
+            "sameLine"
+          ],
+          "default": "nextLine",
+          "description": "Brace placement style. 'nextLine' (Allman) or 'sameLine' (K&R)."
+        },
+        "nwscriptLsp.formatter.sortIncludes": {
+          "type": "boolean",
+          "default": true,
+          "description": "Sort #include directives alphabetically."
+        },
+        "nwscriptLsp.formatter.maxBlankLines": {
+          "type": "number",
+          "default": 1,
+          "description": "Maximum number of consecutive blank lines allowed."
+        },
+        "nwscriptLsp.formatter.trimTrailingWhitespace": {
+          "type": "boolean",
+          "default": true,
+          "description": "Remove trailing whitespace from lines."
+        },
+        "nwscriptLsp.formatter.spaceAfterKeywords": {
+          "type": "boolean",
+          "default": true,
+          "description": "Space between keywords and parentheses: 'if (x)' vs 'if(x)'."
+        },
+        "nwscriptLsp.formatter.spaceInsideParens": {
+          "type": "boolean",
+          "default": false,
+          "description": "Spaces inside parentheses: '( x )' vs '(x)'."
+        },
+        "nwscriptLsp.formatter.spaceAroundOperators": {
+          "type": "boolean",
+          "default": true,
+          "description": "Spaces around binary operators: 'a + b' vs 'a+b'."
+        },
+        "nwscriptLsp.formatter.spaceAfterComma": {
+          "type": "boolean",
+          "default": true,
+          "description": "Space after commas: 'f(a, b)' vs 'f(a,b)'."
         }
       }
     }

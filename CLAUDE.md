@@ -87,6 +87,48 @@ npx @vscode/vsce package --allow-missing-repository
 - For each `#include`, checks if any symbol from that file is referenced
 - Unused imports get `DiagnosticTag::Unnecessary` (grayed out) + quickfix code action to remove
 
+### Formatter (crates/parser/src/formatter/)
+- **AST-based reprinting** — walks the parsed AST and emits freshly formatted output
+- **Comment preservation** — uses a token cursor that walks the lexer's token stream in parallel with the AST walk. Comments are classified as trailing (same line as previous code) or leading (own line) based on whether a newline was seen. The key insight: `collect_comments_before()` initializes `seen_newline` from `self.at_line_start` so comments at file start or after a newline are correctly treated as leading, not trailing
+- **Token cursor design** — non-trivia tokens are skipped (not break the loop) in `collect_comments_before()`, so the cursor always advances forward keeping pace with the AST walk. Without this, the cursor gets stuck at the first non-trivia token and all subsequent comment collection fails
+- **Include sorting** — collects all `#include` declarations with their associated comments, sorts by path (case-insensitive), then emits. Comments travel with their include
+- **Line wrapping** — function params and call args wrap to one-per-line with continuation indent when they exceed `max_line_width`
+- **Blank line preservation** — `TriviaResult` tracks `had_blank_lines` from the token scan (not just from comment metadata) so blank lines between statements are preserved even without comments
+- **C#-style rules** — Allman braces (default), 1 blank line between top-level decls, no blank line after `{` or before `}`, braceless `if`/`while`/etc. get braces enforced
+- **Expression formatting** — `format_expr_str()` returns a String (not writing to output) so line-length decisions can be made before committing. Original literal text is preserved via spans (keeps hex notation, float format, etc.)
+- **Idempotent** — formatting already-formatted code produces identical output (tested)
+
+#### Formatter Architecture
+```
+crates/parser/src/formatter/
+  mod.rs       # FormatConfig, BraceStyle, public format() API
+  printer.rs   # Printer struct — AST walker + token cursor
+  tests.rs     # 33 tests covering all constructs
+
+crates/lsp/src/providers/
+  formatting.rs  # LSP integration: document/range/on-type formatting, FormatterSettings
+```
+
+#### LSP Formatting Capabilities
+- `textDocument/formatting` — full document reformat
+- `textDocument/rangeFormatting` — formats whole document (standard approach)
+- `textDocument/onTypeFormatting` — triggers on `}` (re-indent), `;` (re-indent), `\n` (auto-indent)
+- Configuration flows from VS Code settings → `initializationOptions.formatter` → `FormatterSettings` → `FormatConfig`
+
+#### VS Code Settings
+All under `nwscriptLsp.formatter.*`: `maxLineWidth` (120), `braceStyle` (nextLine/sameLine), `sortIncludes` (true), `maxBlankLines` (1), `trimTrailingWhitespace` (true), `spaceAfterKeywords` (true), `spaceInsideParens` (false), `spaceAroundOperators` (true), `spaceAfterComma` (true)
+
+Users should also set in their VS Code settings:
+```json
+{
+    "[nwscript]": {
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "editor.defaultFormatter": "tdn.nwscript-lsp"
+    }
+}
+```
+
 ## Important Notes
 
 - **Nasher cache is critical** — compiler diagnostics depend on `.nasher/cache/<target>/` existing. If the user hasn't run `nasher compile` yet, the cache won't exist and compiler diagnostics will fall back to multi-directory `--dirs` which can produce false positives

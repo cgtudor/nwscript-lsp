@@ -86,6 +86,38 @@ pub fn analyze_imports(
         }
     }
 
+    // "Remove all unused imports" action when there are 2+
+    let unused_count = diagnostics.len();
+    if unused_count >= 2 {
+        let all_edits: Vec<TextEdit> = actions
+            .iter()
+            .filter_map(|a| {
+                a.edit
+                    .as_ref()?
+                    .changes
+                    .as_ref()?
+                    .get(uri)?
+                    .first()
+                    .cloned()
+            })
+            .collect();
+
+        let mut changes = std::collections::HashMap::new();
+        changes.insert(uri.clone(), all_edits);
+
+        actions.push(CodeAction {
+            title: format!("Remove all {unused_count} unused imports"),
+            kind: Some(CodeActionKind::QUICKFIX),
+            diagnostics: Some(diagnostics.clone()),
+            edit: Some(WorkspaceEdit {
+                changes: Some(changes),
+                ..Default::default()
+            }),
+            is_preferred: Some(false),
+            ..Default::default()
+        });
+    }
+
     ImportAnalysis {
         diagnostics,
         actions,

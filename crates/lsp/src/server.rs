@@ -17,6 +17,8 @@ use crate::providers;
 pub struct NwscriptConfig {
     pub compiler_path: Option<String>,
     pub include_dirs: Option<Vec<String>>,
+    #[serde(default)]
+    pub formatter: providers::formatting::FormatterSettings,
 }
 
 pub struct NwscriptLanguageServer {
@@ -292,6 +294,12 @@ impl LanguageServer for NwscriptLanguageServer {
                     work_done_progress_options: Default::default(),
                 }),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
+                document_range_formatting_provider: Some(OneOf::Left(true)),
+                document_on_type_formatting_provider: Some(DocumentOnTypeFormattingOptions {
+                    first_trigger_character: "}".into(),
+                    more_trigger_character: Some(vec![";".into(), "\n".into()]),
+                }),
                 ..Default::default()
             },
         })
@@ -456,6 +464,64 @@ impl LanguageServer for NwscriptLanguageServer {
         });
 
         Ok(help.flatten())
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = &params.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let config = {
+            let cfg = self.config.read().unwrap();
+            providers::formatting::build_config(&params.options, &cfg.formatter)
+        };
+
+        let edits = providers::formatting::format_document(&doc.source, &config);
+        Ok(Some(edits))
+    }
+
+    async fn range_formatting(
+        &self,
+        params: DocumentRangeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        // For range formatting, we format the whole document.
+        // This is standard practice (rustfmt, clang-format, etc.).
+        let uri = &params.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let config = {
+            let cfg = self.config.read().unwrap();
+            providers::formatting::build_config(&params.options, &cfg.formatter)
+        };
+
+        let edits = providers::formatting::format_document(&doc.source, &config);
+        Ok(Some(edits))
+    }
+
+    async fn on_type_formatting(
+        &self,
+        params: DocumentOnTypeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let config = {
+            let cfg = self.config.read().unwrap();
+            providers::formatting::build_config(&params.options, &cfg.formatter)
+        };
+
+        let edits = providers::formatting::on_type_format(
+            &doc.source,
+            params.text_document_position.position,
+            &params.ch,
+            &config,
+        );
+        Ok(Some(edits))
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
