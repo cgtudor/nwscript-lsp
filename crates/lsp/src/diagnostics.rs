@@ -14,6 +14,8 @@ pub async fn compile_file(
     source: &str,
     nasher_cache: &Option<PathBuf>,
     extra_dirs: &[PathBuf],
+    nwn_root: &Option<PathBuf>,
+    nwn_home: &Option<PathBuf>,
 ) -> Vec<Diagnostic> {
     let mut cmd = Command::new(compiler_path);
 
@@ -25,6 +27,15 @@ pub async fn compile_file(
     cmd.arg("-E");
     // Suppress info logging
     cmd.arg("--quiet");
+
+    // Pass NWN root and user directory so the compiler can resolve
+    // base game resources from KEY/BIF files (matching nasher behavior).
+    if let Some(root) = nwn_root {
+        cmd.arg("--root").arg(root);
+    }
+    if let Some(home) = nwn_home {
+        cmd.arg("--userdirectory").arg(home);
+    }
 
     // Strategy: write current source into the nasher cache directory and compile
     // from there. The compiler resolves includes from the compiled file's

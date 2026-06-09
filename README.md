@@ -8,14 +8,18 @@ Built in Rust with [tower-lsp](https://github.com/ebkalderon/tower-lsp), featuri
 
 - **Workspace indexing** -- scans all `.nss` files on startup, auto-discovers source dirs from `nasher.cfg`
 - **Cross-file include resolution** -- follows `#include` graph with cycle detection, transitive symbol visibility
+- **Vanilla script support** -- auto-extracts `.nss` from NWN:EE KEY/BIF files for include resolution and go-to-definition
 - **Diagnostics** -- real-time parse errors as you type, plus full compiler diagnostics on save (via bundled `nwn_script_comp`)
 - **Document symbols** -- outline of functions, structs, constants, and global variables
-- **Completion** -- all symbols across the workspace with auto-import for non-included files
+- **Completion** -- all workspace symbols with auto-import, plus local variables and parameters (sorted by relevance)
 - **Hover** -- type information and doc comments for functions, structs, and variables across files
 - **Go to definition** -- jump to definitions across files, prefers implementations over forward declarations
+- **Find references** -- find all usages of a symbol across the workspace
+- **Rename symbol** -- rename functions, constants, and local variables across all files
 - **Signature help** -- parameter hints when typing function calls (triggered on `(` and `,`)
 - **Unused import detection** -- grayed-out `#include` directives with quick-fix removal
 - **Code formatting** -- full document, range, and on-type formatting with configurable style (Allman/K&R braces, line width, include sorting, and more)
+- **Semantic highlighting** -- AST-based highlighting for function calls, parameters, struct names, and field access
 
 ## Architecture
 
@@ -152,9 +156,9 @@ The LSP works with any NWScript project layout:
 - [x] Unused import detection with quick-fix removal
 - [x] Auto-import on completion
 - [x] Configurable directory exclusion
-- [ ] Find references / rename
-- [ ] Semantic tokens (syntax highlighting from AST)
-- [ ] Local variable completion (variables within current function scope)
+- [x] Find references / rename
+- [x] Semantic tokens (syntax highlighting from AST)
+- [x] Local variable completion (variables within current function scope)
 
 ## License
 

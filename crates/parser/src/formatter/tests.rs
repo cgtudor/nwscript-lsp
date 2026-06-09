@@ -387,6 +387,22 @@ fn format_braceless_if_gets_braces() {
 }
 
 #[test]
+fn format_braceless_if_trailing_comment_moves_inside() {
+    // Inline if with trailing comment: comment should move inside the block
+    let input = "void main(){if(x>0) baseitem = 5; // Maul\n}";
+    let result = fmt(input);
+    assert!(
+        result.contains("// Maul\n        baseitem = 5;"),
+        "Comment should appear above the statement inside braces. Got:\n{}", result
+    );
+    // Comment should NOT appear after the closing brace
+    assert!(
+        !result.contains("} // Maul"),
+        "Comment should not trail the closing brace. Got:\n{}", result
+    );
+}
+
+#[test]
 fn format_field_access() {
     let input = "void main(){sData.nValue=5;}";
     let expected = "\
@@ -474,6 +490,80 @@ fn format_multiple_declarations_separated() {
     let input2 = "const int A=1;\n\nconst int B=2;void Func(){return;}";
     let result2 = fmt(input2);
     assert!(result2.contains("const int A = 1;\n\nconst int B = 2;\n\nvoid Func()"));
+}
+
+// =============================================================================
+// Declaration spacing
+// =============================================================================
+
+#[test]
+fn format_prototypes_preserve_blank_lines() {
+    // Consecutive prototypes with single blank line: preserved
+    let input = "// Comment A\nvoid FuncA();\n\n// Comment B\nvoid FuncB();\n";
+    let result = fmt(input);
+    assert_eq!(
+        result,
+        "// Comment A\nvoid FuncA();\n\n// Comment B\nvoid FuncB();\n"
+    );
+}
+
+#[test]
+fn format_prototypes_no_extra_blank_lines() {
+    // Consecutive prototypes without blank lines: stay together
+    let input = "void FuncA();\nvoid FuncB();\nvoid FuncC();\n";
+    let result = fmt(input);
+    assert_eq!(result, "void FuncA();\nvoid FuncB();\nvoid FuncC();\n");
+}
+
+#[test]
+fn format_commented_prototypes_single_blank() {
+    // Pattern from _tdn_handlefeats: commented prototypes with blank lines
+    let input = r#"string X = "foo";
+
+// Evasion Fix
+void HandleEvasion(object oPC);
+
+// Returns Valid
+int GetIsValid(object oItem);
+"#;
+    let result = fmt(input);
+    // Should have exactly 1 blank line between each, not 2 or 3
+    assert!(
+        result.contains("string X = \"foo\";\n\n// Evasion Fix\nvoid HandleEvasion(object oPC);\n\n// Returns Valid\nint GetIsValid(object oItem);\n"),
+        "Got:\n{}", result
+    );
+}
+
+#[test]
+fn format_vars_then_function_def() {
+    // Variable group followed by a function definition
+    let input = "int X = 1;\nint Y = 2;\n\nvoid Func()\n{\nreturn;\n}\n";
+    let result = fmt(input);
+    // Should have exactly 1 blank line between vars and function def
+    assert!(
+        result.contains("int Y = 2;\n\nvoid Func()"),
+        "Got:\n{}", result
+    );
+    // Should NOT have 3+ blank lines
+    assert!(
+        !result.contains("\n\n\n"),
+        "Triple blank line found:\n{}", result
+    );
+}
+
+#[test]
+fn format_function_def_spacing() {
+    // Two function definitions always get exactly 1 blank line
+    let input = "void A()\n{\nreturn;\n}\nvoid B()\n{\nreturn;\n}\n";
+    let result = fmt(input);
+    assert!(
+        result.contains("}\n\nvoid B()"),
+        "Got:\n{}", result
+    );
+    assert!(
+        !result.contains("\n\n\n"),
+        "Triple blank line found:\n{}", result
+    );
 }
 
 // =============================================================================

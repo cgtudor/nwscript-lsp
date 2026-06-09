@@ -4,14 +4,17 @@ Language server for **NWScript**, the scripting language used by Neverwinter Nig
 
 ## Features
 
-- **Completions** -- all symbols across your workspace, with auto-import for symbols from non-included files
+- **Completions** -- all symbols across your workspace with auto-import, plus local variables and parameters (sorted by relevance)
 - **Go to Definition** -- jump to function/constant/struct definitions (prefers implementations over forward declarations)
+- **Find References** -- find all usages of a symbol across the workspace
+- **Rename Symbol** -- rename functions, constants, and local variables across all files
 - **Hover** -- type signatures and doc comments on hover
 - **Signature Help** -- parameter hints as you type function calls
 - **Diagnostics** -- real-time parser errors on keystroke, compiler errors on save (via `nwn_script_comp`)
 - **Unused Import Detection** -- grayed-out `#include` directives that aren't referenced, with quick-fix removal
 - **Document Symbols** -- outline view of functions, structs, and constants
 - **Code Formatting** -- full document, range, and on-type formatting with configurable style
+- **Semantic Highlighting** -- AST-based highlighting for function calls, parameters, struct names, and field access
 - **Syntax Highlighting** -- TextMate grammar for NWScript
 
 ## Setup

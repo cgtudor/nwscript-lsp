@@ -299,11 +299,15 @@ impl<'a> Printer<'a> {
 
         // Format remaining declarations
         let is_first_decl = includes.is_empty();
-        let mut prev_was_var = false;
+        let mut prev_was_lightweight = false;
         for (i, decl) in others.iter().enumerate() {
             let is_first = is_first_decl && i == 0;
-            self.format_declaration(decl, is_first, prev_was_var);
-            prev_was_var = matches!(decl, Declaration::GlobalVar(_));
+            self.format_declaration(decl, is_first, prev_was_lightweight);
+            prev_was_lightweight = match decl {
+                Declaration::GlobalVar(_) => true,
+                Declaration::Function(f) => f.is_prototype(),
+                _ => false,
+            };
         }
 
         self.emit_trailing_trivia();
@@ -400,7 +404,7 @@ impl<'a> Printer<'a> {
         &mut self,
         decl: &Declaration,
         is_first: bool,
-        prev_was_var: bool,
+        prev_was_lightweight: bool,
     ) {
         let trivia = self.collect_comments_before(decl.span().start);
 
@@ -408,25 +412,43 @@ impl<'a> Printer<'a> {
         self.emit_trailing_comments(&trivia.comments);
 
         // 2) Blank line separator between declarations (not before the first).
-        //    For consecutive variable/constant declarations, only add a blank
-        //    line if the user had one (preserves intentional grouping).
-        //    For functions and structs, always separate with a blank line.
-        let is_var = matches!(decl, Declaration::GlobalVar(_));
+        //    "Lightweight" declarations are variable/const declarations and
+        //    function prototypes (no body). For consecutive lightweight decls,
+        //    only add a blank line if the user had one (preserves grouping).
+        //    Function definitions (with bodies) and structs always get a blank line.
+        //
+        //    When leading comments are present, emit_leading_comments handles
+        //    the newline before the comment, so we only need to ensure we're
+        //    on a new line (not add a full blank_line on top of it).
+        let is_lightweight = match decl {
+            Declaration::GlobalVar(_) => true,
+            Declaration::Function(f) => f.is_prototype(),
+            _ => false,
+        };
+        let has_leading = trivia.comments.iter().any(|c| !c.is_trailing);
         if !is_first {
-            if prev_was_var && is_var {
-                // Consecutive variable decls: always a newline, but only add an
-                // extra blank line if the user had one (preserves grouping).
-                self.newline();
-                if trivia.had_blank_lines {
-                    self.newline(); // blank line between groups
+            if prev_was_lightweight && is_lightweight {
+                // Consecutive lightweight decls: just end the line.
+                // emit_leading_comments or the declaration itself starts
+                // on the next line. Blank lines are preserved via
+                // had_blank_lines in the trivia/comment handling.
+                if !has_leading {
+                    self.newline();
+                    if trivia.had_blank_lines {
+                        self.newline();
+                    }
                 }
+                // When has_leading, emit_leading_comments handles spacing.
             } else {
-                self.blank_line();
+                // Between heavy decls (function defs, structs), always a blank line.
+                if !has_leading {
+                    self.blank_line();
+                }
+                // When has_leading, emit_leading_comments handles spacing.
             }
         }
 
         // 3) Emit leading comments
-        let has_leading = trivia.comments.iter().any(|c| !c.is_trailing);
         if has_leading {
             if is_first {
                 self.emit_leading_comments_first(&trivia.comments);
@@ -596,13 +618,15 @@ impl<'a> Printer<'a> {
             // Emit trailing comments from previous statement
             self.emit_trailing_comments(&trivia.comments);
 
-            // C#-style: preserve blank lines between statements for logical grouping
-            if !is_first && trivia.had_blank_lines {
+            // C#-style: preserve blank lines between statements for logical grouping.
+            // When leading comments are present, emit_leading_comments handles
+            // the blank line via the comment's own blank_lines_before tracking.
+            let has_leading = trivia.comments.iter().any(|c| !c.is_trailing);
+            if !is_first && trivia.had_blank_lines && !has_leading {
                 self.newline(); // extra blank line
             }
 
             // Emit leading comments
-            let has_leading = trivia.comments.iter().any(|c| !c.is_trailing);
             if has_leading {
                 self.emit_leading_comments(&trivia.comments);
             }
@@ -800,6 +824,11 @@ impl<'a> Printer<'a> {
 
     /// Format the body of a control flow statement.
     /// If it's a block, format with braces. Otherwise, wrap in braces (enforce braces).
+    /// Format a statement body, wrapping in braces if needed.
+    ///
+    /// For braceless statements (e.g., `if (x) stmt;`), wraps in braces.
+    /// Any trailing comment on the inline statement (e.g., `// Maul`) is
+    /// emitted as a comment above the statement inside the block.
     fn format_stmt_body(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Block(b) => {
@@ -809,9 +838,31 @@ impl<'a> Printer<'a> {
                 self.write("}");
             }
             _ => {
-                // Always wrap in braces (enforce C# style)
+                // Always wrap in braces (enforce C# style).
+                // Peek ahead: if the inline statement has a trailing comment,
+                // emit it as a leading comment inside the block.
+                let end_pos = stmt.span().end;
+                let saved_cursor = self.cursor;
+                let trivia = self.collect_comments_before(end_pos + 100);
+                let trailing_comment = trivia
+                    .comments
+                    .iter()
+                    .find(|c| c.is_trailing)
+                    .map(|c| c.text.clone());
+                // If no trailing comment found, restore cursor so normal
+                // processing handles it.
+                if trailing_comment.is_none() {
+                    self.cursor = saved_cursor;
+                }
+
                 self.format_open_brace();
                 self.indent_level += 1;
+
+                if let Some(comment) = &trailing_comment {
+                    self.newline();
+                    self.write(comment);
+                }
+
                 self.format_stmt(stmt);
                 self.indent_level -= 1;
                 self.newline();

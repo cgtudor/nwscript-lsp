@@ -39,6 +39,10 @@ pub struct NwscriptLanguageServer {
     nasher_cache: RwLock<Option<PathBuf>>,
     /// Fallback: all directories containing .nss files.
     nss_dirs: RwLock<Vec<PathBuf>>,
+    /// NWN:EE installation root (for --root compiler flag).
+    nwn_root: RwLock<Option<PathBuf>>,
+    /// NWN:EE user directory (for --userdirectory compiler flag).
+    nwn_home: RwLock<Option<PathBuf>>,
     /// Last compiler diagnostics per file (cleared on edit, updated on save).
     compiler_diags: DashMap<Url, Vec<Diagnostic>>,
 }
@@ -52,6 +56,8 @@ impl NwscriptLanguageServer {
             config: RwLock::new(NwscriptConfig::default()),
             nasher_cache: RwLock::new(None),
             nss_dirs: RwLock::new(Vec::new()),
+            nwn_root: RwLock::new(None),
+            nwn_home: RwLock::new(None),
             compiler_diags: DashMap::new(),
         }
     }
@@ -106,7 +112,12 @@ impl NwscriptLanguageServer {
         // Extract vanilla .nss scripts from NWN:EE installation KEY/BIF files.
         // These are written to a cache directory and indexed at lowest priority
         // (workspace files override them).
-        let vanilla_cache_dir = extract_vanilla_scripts(nwn_root_setting.as_deref());
+        let (vanilla_cache_dir, nwn_root) =
+            extract_vanilla_scripts(nwn_root_setting.as_deref());
+        *self.nwn_root.write().unwrap() = nwn_root;
+
+        // Detect NWN user directory for compiler --userdirectory flag
+        *self.nwn_home.write().unwrap() = find_nwn_home();
 
         // Find nasher cache for compiler diagnostics (preferred over --dirs).
         // Search both workspace dirs and parents of source dirs (nasher.cfg is
@@ -247,6 +258,8 @@ impl NwscriptLanguageServer {
 
         let nasher_cache = self.nasher_cache.read().unwrap().clone();
         let fallback_dirs = self.nss_dirs.read().unwrap().clone();
+        let nwn_root = self.nwn_root.read().unwrap().clone();
+        let nwn_home = self.nwn_home.read().unwrap().clone();
 
         let compiler_diagnostics = crate::diagnostics::compile_file(
             &compiler_path,
@@ -254,6 +267,8 @@ impl NwscriptLanguageServer {
             &source,
             &nasher_cache,
             &fallback_dirs,
+            &nwn_root,
+            &nwn_home,
         )
         .await;
 
@@ -333,7 +348,22 @@ impl LanguageServer for NwscriptLanguageServer {
                     retrigger_characters: None,
                     work_done_progress_options: Default::default(),
                 }),
+                references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                })),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: providers::semantic_tokens::legend(),
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            range: None,
+                            ..Default::default()
+                        },
+                    ),
+                ),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_range_formatting_provider: Some(OneOf::Left(true)),
                 document_on_type_formatting_provider: Some(DocumentOnTypeFormattingOptions {
@@ -378,6 +408,14 @@ impl LanguageServer for NwscriptLanguageServer {
             self.documents.update(&uri, version, change.text);
             // Clear compiler diagnostics on edit — they'll refresh on next save
             self.publish_diagnostics_for(&uri, true).await;
+
+            // Also refresh diagnostics for other open documents so cross-file
+            // changes (e.g., from rename) are reflected immediately.
+            for other_uri in self.documents.all_uris() {
+                if other_uri != uri {
+                    self.publish_diagnostics_for(&other_uri, false).await;
+                }
+            }
         }
     }
 
@@ -401,17 +439,23 @@ impl LanguageServer for NwscriptLanguageServer {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
         let Some(doc) = self.documents.get(uri) else {
             return Ok(Some(CompletionResponse::Array(
                 providers::completion::keyword_completions(),
             )));
         };
 
+        let cursor_offset = doc
+            .line_index
+            .offset(position.line, position.character)
+            .unwrap_or(0);
+
         let guard = self.index.read().unwrap();
         let items = match guard.as_ref() {
             Some(index) => {
                 let mut items = providers::completion::completions_from_index(
-                    index, uri, &doc.parsed, &doc.line_index,
+                    index, uri, &doc.parsed, &doc.line_index, cursor_offset,
                 );
                 items.extend(providers::completion::keyword_completions());
                 items
@@ -474,6 +518,138 @@ impl LanguageServer for NwscriptLanguageServer {
         });
 
         Ok(location.flatten().map(GotoDefinitionResponse::Scalar))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let include_declaration = params.context.include_declaration;
+
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let refs = self.with_index(|index| {
+            providers::references::find_references(
+                index,
+                &doc.source,
+                &doc.line_index,
+                position,
+                uri,
+                include_declaration,
+            )
+        });
+
+        Ok(refs.filter(|r| !r.is_empty()))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let uri = &params.text_document.uri;
+        let position = params.position;
+
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let offset = match doc.line_index.offset(position.line, position.character) {
+            Some(o) => o,
+            None => return Ok(None),
+        };
+
+        let Some(name) =
+            providers::hover::find_ident_at(&doc.source, offset as usize)
+        else {
+            return Ok(None);
+        };
+
+        // Verify it's a renamable symbol: either in the workspace index
+        // (functions, globals, constants) or a local variable/parameter.
+        let is_workspace_symbol = self
+            .with_index(|index| {
+                let symbols = index.visible_symbols(uri);
+                symbols.iter().any(|s| s.name == name)
+            })
+            .unwrap_or(false);
+
+        let is_local = providers::completion::is_local_symbol(
+            &doc.parsed,
+            offset,
+            &name,
+        );
+
+        if !is_workspace_symbol && !is_local {
+            return Ok(None);
+        }
+
+        // Return the range of the identifier under cursor
+        let bytes = doc.source.as_bytes();
+        let off = offset as usize;
+        let mut start = off;
+        while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') {
+            start -= 1;
+        }
+        let mut end = off;
+        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+            end += 1;
+        }
+
+        let (sl, sc) = doc.line_index.line_col(start as u32);
+        let (el, ec) = doc.line_index.line_col(end as u32);
+        let range = Range::new(Position::new(sl, sc), Position::new(el, ec));
+
+        Ok(Some(PrepareRenameResponse::Range(range)))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let new_name = &params.new_name;
+
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        // Find all references to this symbol
+        let refs = self.with_index(|index| {
+            providers::references::find_references(
+                index,
+                &doc.source,
+                &doc.line_index,
+                position,
+                uri,
+                true, // include declaration
+            )
+        });
+
+        let Some(refs) = refs else {
+            return Ok(None);
+        };
+
+        if refs.is_empty() {
+            return Ok(None);
+        }
+
+        // Group edits by file URI
+        let mut changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+            std::collections::HashMap::new();
+
+        for loc in refs {
+            changes
+                .entry(loc.uri)
+                .or_default()
+                .push(TextEdit {
+                    range: loc.range,
+                    new_text: new_name.clone(),
+                });
+        }
+
+        Ok(Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }))
     }
 
     async fn document_symbol(
@@ -587,6 +763,28 @@ impl LanguageServer for NwscriptLanguageServer {
 
         Ok(Some(actions))
     }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let uri = &params.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let result = self.with_index(|index| {
+            providers::semantic_tokens::semantic_tokens(
+                &doc.parsed,
+                &doc.source,
+                &doc.line_index,
+                index,
+                uri,
+            )
+        });
+
+        Ok(result)
+    }
 }
 
 /// Search for the bundled `nwn_script_comp` binary next to our own executable.
@@ -619,9 +817,11 @@ fn default_exclude_dirs() -> Vec<String> {
 
 /// Extract vanilla .nss scripts from the NWN:EE installation into a cache dir.
 ///
-/// Returns the cache directory path if extraction succeeded.
-fn extract_vanilla_scripts(nwn_root_setting: Option<&str>) -> Option<PathBuf> {
-    let nwn_root = crate::nwn_install::find_nwn_root(nwn_root_setting)?;
+/// Returns (cache directory, NWN root path) if extraction succeeded.
+fn extract_vanilla_scripts(nwn_root_setting: Option<&str>) -> (Option<PathBuf>, Option<PathBuf>) {
+    let Some(nwn_root) = crate::nwn_install::find_nwn_root(nwn_root_setting) else {
+        return (None, None);
+    };
     tracing::info!("NWN:EE installation found: {}", nwn_root.display());
 
     let cache_dir = dirs::cache_dir()
@@ -631,7 +831,7 @@ fn extract_vanilla_scripts(nwn_root_setting: Option<&str>) -> Option<PathBuf> {
 
     if let Err(e) = std::fs::create_dir_all(&cache_dir) {
         tracing::warn!("failed to create vanilla cache dir: {e}");
-        return None;
+        return (None, Some(nwn_root));
     }
 
     match crate::keybif::extract_nss_from_install(&nwn_root) {
@@ -652,11 +852,39 @@ fn extract_vanilla_scripts(nwn_root_setting: Option<&str>) -> Option<PathBuf> {
                 count,
                 cache_dir.display()
             );
-            Some(cache_dir)
+            (Some(cache_dir), Some(nwn_root))
         }
         Err(e) => {
             tracing::warn!("failed to extract vanilla scripts: {e}");
-            None
+            (None, Some(nwn_root))
         }
     }
+}
+
+/// Find the NWN:EE user directory (for compiler --userdirectory flag).
+fn find_nwn_home() -> Option<PathBuf> {
+    // Check environment variables first
+    if let Ok(home) = std::env::var("NWN_HOME") {
+        let p = PathBuf::from(&home);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    if let Ok(home) = std::env::var("NWN_USER_DIRECTORY") {
+        let p = PathBuf::from(&home);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+
+    // Platform defaults
+    let candidate = if cfg!(windows) {
+        dirs::document_dir().map(|d| d.join("Neverwinter Nights"))
+    } else if cfg!(target_os = "macos") {
+        dirs::document_dir().map(|d| d.join("Neverwinter Nights"))
+    } else {
+        dirs::data_local_dir().map(|d| d.join("Neverwinter Nights"))
+    };
+
+    candidate.filter(|p| p.is_dir())
 }

@@ -25,9 +25,11 @@ crates/
       keybif.rs    # KEY/BIF file reader for extracting vanilla scripts from NWN install
       nwn_install.rs # NWN:EE installation auto-detection (Steam, Beamdog, GOG, env var)
       providers/
-        completion.rs  # Completion with auto-import (all workspace symbols)
+        completion.rs  # Completion with auto-import + local variable/parameter completion
         definition.rs  # Goto-definition (prefers implementations over prototypes)
         hover.rs       # Hover info with doc comment extraction
+        references.rs  # Find all references (whole-word search, skips comments/strings)
+        semantic_tokens.rs # AST-based semantic highlighting (functions, types, params, etc.)
         signature.rs   # Signature help (parameter hints)
         symbols.rs     # Document symbols outline
         actions.rs     # Code actions (remove unused imports)
