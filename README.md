@@ -11,13 +11,16 @@ Built in Rust with [tower-lsp](https://github.com/ebkalderon/tower-lsp), featuri
 - **Vanilla script support** -- auto-extracts `.nss` from NWN:EE KEY/BIF files for include resolution and go-to-definition
 - **Diagnostics** -- real-time parse errors as you type, plus full compiler diagnostics on save (via bundled `nwn_script_comp`)
 - **Document symbols** -- outline of functions, structs, constants, and global variables
+- **Workspace symbol search** -- find any symbol across the workspace with `Ctrl+T`
 - **Completion** -- all workspace symbols with auto-import, plus local variables and parameters (sorted by relevance)
 - **Hover** -- type information and doc comments for functions, structs, and variables across files
 - **Go to definition** -- jump to definitions across files, prefers implementations over forward declarations
 - **Find references** -- find all usages of a symbol across the workspace
 - **Rename symbol** -- rename functions, constants, and local variables across all files
 - **Signature help** -- parameter hints when typing function calls (triggered on `(` and `,`)
+- **Inlay hints** -- parameter name hints at call sites (e.g. `nObjectType: 1, sTemplate: "goblin01"`)
 - **Unused import detection** -- grayed-out `#include` directives with quick-fix removal
+- **Folding ranges** -- collapse functions, structs, control flow blocks, `#include` groups, and comment blocks
 - **Code formatting** -- full document, range, and on-type formatting with configurable style (Allman/K&R braces, line width, include sorting, and more)
 - **Semantic highlighting** -- AST-based highlighting for function calls, parameters, struct names, and field access
 
@@ -130,6 +133,13 @@ All settings are under the `nwscriptLsp` namespace in VS Code.
 | `includeDirs` | `[]` | Additional source directories (added to those from `nasher.cfg`). |
 | `excludeDirs` | `["node_modules", "target", "build", "output"]` | Directory names to skip when scanning. Dot-prefixed dirs always skipped. |
 
+### Inlay Hints
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `inlayHints.enabled` | `true` | Show parameter name inlay hints at call sites. |
+| `inlayHints.suppressForSingleArgCalls` | `false` | Hide hints for single-argument function calls. |
+
 ### Formatter
 
 | Setting | Default | Description |
@@ -176,6 +186,9 @@ The LSP works with any NWScript project layout:
 - [x] Find references / rename
 - [x] Semantic tokens (syntax highlighting from AST)
 - [x] Local variable completion (variables within current function scope)
+- [x] Inlay hints (parameter names at call sites)
+- [x] Workspace symbol search (`Ctrl+T`)
+- [x] Folding ranges (functions, structs, blocks, includes, comments)
 
 ## License
 

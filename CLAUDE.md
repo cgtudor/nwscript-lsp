@@ -32,6 +32,9 @@ crates/
         semantic_tokens.rs # AST-based semantic highlighting (functions, types, params, etc.)
         signature.rs   # Signature help (parameter hints)
         symbols.rs     # Document symbols outline
+        workspace_symbols.rs # Workspace-wide symbol search (Ctrl+T)
+        inlay_hints.rs # Parameter name hints at call sites
+        folding.rs     # Folding ranges (functions, structs, blocks, includes, comments)
         actions.rs     # Code actions (remove unused imports)
 editors/
   vscode/          # VS Code extension (thin TypeScript client)
@@ -47,7 +50,7 @@ bin/
 # Check compilation (fast)
 cargo check
 
-# Run all tests (57 tests: lexer, parser, formatter, signature, nasher, integration)
+# Run all tests (87 tests: lexer, parser, formatter, providers, nasher, integration)
 cargo test
 
 # Build release binary
@@ -131,6 +134,8 @@ crates/lsp/src/providers/
 #### VS Code Settings
 General settings: `compilerPath`, `serverPath`, `nwnRoot` (NWN:EE install path, auto-detected), `nwscriptNssPath`, `includeDirs`, `excludeDirs` (defaults: `["node_modules", "target", "build", "output"]`)
 
+Inlay hints settings under `nwscriptLsp.inlayHints.*`: `enabled` (true), `suppressForSingleArgCalls` (false)
+
 Formatter settings under `nwscriptLsp.formatter.*`: `maxLineWidth` (120), `braceStyle` (nextLine/sameLine), `sortIncludes` (true), `maxBlankLines` (1), `trimTrailingWhitespace` (true), `spaceAfterKeywords` (true), `spaceInsideParens` (false), `spaceAroundOperators` (true), `spaceAfterComma` (true)
 
 Users should also set in their VS Code settings:
@@ -143,6 +148,25 @@ Users should also set in their VS Code settings:
     }
 }
 ```
+
+### Inlay Hints (inlay_hints.rs)
+- Walks the AST to find `Expr::Call` nodes, resolves callee name via `index.find_symbol()` to get parameter names
+- Emits `InlayHint` with `InlayHintKind::PARAMETER` at the start of each argument span
+- **Suppression**: skips hints when the argument identifier matches the parameter name (case-insensitive), avoiding redundant hints like `Foo(nCount:` nCount`)`
+- Configurable: `enabled` (default true), `suppressForSingleArgCalls` (default false)
+- Settings flow from VS Code → `initializationOptions.inlayHints` → `InlayHintsSettings` in `NwscriptConfig`
+
+### Workspace Symbol Search (workspace_symbols.rs)
+- Implements `workspace/symbol` — the `Ctrl+T` / `#symbol` experience
+- Case-insensitive substring matching against `index.all_workspace_symbols()`
+- Prefix matches sorted first, then by name length; capped at 200 results
+- Empty query returns nothing to avoid flooding the client
+
+### Folding Ranges (folding.rs)
+- **AST-based**: function bodies, struct bodies, if/else/while/for/switch/do-while blocks
+- **Import folding**: consecutive `#include` groups (2+) with `FoldingRangeKind::Imports`
+- **Comment folding**: block comments (`/* */`) and consecutive line comment groups via `Lexer::tokenize()` token scan
+- Only multi-line spans produce fold ranges
 
 ## Important Notes
 

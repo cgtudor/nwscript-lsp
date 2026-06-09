@@ -1,6 +1,25 @@
 # Changelog
 
-## 1.1.1
+## 1.3.0
+
+### New Features
+
+- **Inlay hints** -- parameter name hints at call sites (e.g. `CreateObject(nObjectType: 1, sTemplate: "goblin01", ...)`). Suppresses redundant hints when the argument name matches the parameter name. Configurable via `inlayHints.enabled` and `inlayHints.suppressForSingleArgCalls` settings.
+- **Workspace symbol search** -- find any function, struct, constant, or variable across the entire workspace with `Ctrl+T` (or `#` in the command palette). Case-insensitive substring matching with prefix matches ranked first.
+- **Folding ranges** -- collapse function bodies, struct bodies, control flow blocks (if/while/for/switch), consecutive `#include` groups, block comments, and consecutive line comment groups in the editor.
+
+### New Settings
+
+- **`inlayHints.enabled`** -- enable/disable parameter name inlay hints (default: `true`)
+- **`inlayHints.suppressForSingleArgCalls`** -- hide hints for single-argument function calls (default: `false`)
+
+## 1.2.1
+
+### Fixes
+
+- Linux release now bundles `nwn_script_comp` for compiler diagnostics (was missing in 1.2.0)
+
+## 1.2.0
 
 ### New Settings
 

@@ -50,6 +50,10 @@ export function activate(context: ExtensionContext) {
       nwscriptNssPath: config.get<string>("nwscriptNssPath", ""),
       nwnRoot: config.get<string>("nwnRoot", ""),
       extractVanillaScripts: config.get<boolean>("extractVanillaScripts", true),
+      inlayHints: {
+        enabled: config.get<boolean>("inlayHints.enabled", true),
+        suppressForSingleArgCalls: config.get<boolean>("inlayHints.suppressForSingleArgCalls", false),
+      },
       formatter: {
         maxLineWidth: config.get<number>("formatter.maxLineWidth"),
         braceStyle: config.get<string>("formatter.braceStyle"),

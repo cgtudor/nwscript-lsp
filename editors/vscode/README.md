@@ -12,7 +12,10 @@ Language server for **NWScript**, the scripting language used by Neverwinter Nig
 - **Signature Help** -- parameter hints as you type function calls
 - **Diagnostics** -- real-time parser errors on keystroke, compiler errors on save (via `nwn_script_comp`)
 - **Unused Import Detection** -- grayed-out `#include` directives that aren't referenced, with quick-fix removal
+- **Inlay Hints** -- parameter name hints at call sites (e.g. `nObjectType: 1, sTemplate: "goblin01"`)
+- **Workspace Symbol Search** -- find any symbol across the workspace with `Ctrl+T`
 - **Document Symbols** -- outline view of functions, structs, and constants
+- **Folding Ranges** -- collapse functions, structs, control flow blocks, `#include` groups, and comment blocks
 - **Code Formatting** -- full document, range, and on-type formatting with configurable style
 - **Semantic Highlighting** -- AST-based highlighting for function calls, parameters, struct names, and field access
 - **Syntax Highlighting** -- TextMate grammar for NWScript
@@ -70,6 +73,13 @@ All settings are under the `nwscriptLsp` namespace. Open **Settings** (Ctrl+,) a
 | `extractVanillaScripts` | `true` | Extract vanilla `.nss` scripts from NWN:EE KEY/BIF files. Set to `false` to skip extraction if you only need `nwscript.nss`. |
 | `includeDirs` | `[]` | Additional source directories (added to those from `nasher.cfg`). |
 | `excludeDirs` | `["node_modules", "target", "build", "output"]` | Directory names to skip when scanning for `.nss` files. Dot-prefixed directories (`.git`, `.nasher`, etc.) are always skipped. |
+
+### Inlay Hints
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `inlayHints.enabled` | `true` | Show parameter name inlay hints at call sites. Also requires VS Code's `editor.inlayHints.enabled`. |
+| `inlayHints.suppressForSingleArgCalls` | `false` | Hide inlay hints for function calls with only one argument. |
 
 ### Formatter
 

@@ -11,6 +11,14 @@ use crate::document::DocumentStore;
 use crate::index::WorkspaceIndex;
 use crate::providers;
 
+/// Inlay hints settings from the client.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlayHintsSettings {
+    pub enabled: Option<bool>,
+    pub suppress_for_single_arg_calls: Option<bool>,
+}
+
 /// Configuration received from the client.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +37,8 @@ pub struct NwscriptConfig {
     /// Whether to extract vanilla .nss scripts from KEY/BIF files.
     /// Defaults to true. Set to false to skip extraction (only nwscript.nss will be used).
     pub extract_vanilla_scripts: Option<bool>,
+    #[serde(default)]
+    pub inlay_hints: Option<InlayHintsSettings>,
     #[serde(default)]
     pub formatter: providers::formatting::FormatterSettings,
 }
@@ -375,6 +385,9 @@ impl LanguageServer for NwscriptLanguageServer {
                         },
                     ),
                 ),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_range_formatting_provider: Some(OneOf::Left(true)),
                 document_on_type_formatting_provider: Some(DocumentOnTypeFormattingOptions {
@@ -795,6 +808,68 @@ impl LanguageServer for NwscriptLanguageServer {
         });
 
         Ok(result)
+    }
+
+    async fn folding_range(
+        &self,
+        params: FoldingRangeParams,
+    ) -> Result<Option<Vec<FoldingRange>>> {
+        let uri = &params.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let ranges =
+            providers::folding::folding_ranges(&doc.parsed, &doc.source, &doc.line_index);
+
+        Ok(Some(ranges))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let results = self.with_index(|index| {
+            providers::workspace_symbols::workspace_symbols(index, &params.query)
+        });
+
+        Ok(results.filter(|r| !r.is_empty()))
+    }
+
+    async fn inlay_hint(
+        &self,
+        params: InlayHintParams,
+    ) -> Result<Option<Vec<InlayHint>>> {
+        let uri = &params.text_document.uri;
+        let Some(doc) = self.documents.get(uri) else {
+            return Ok(None);
+        };
+
+        let (enabled, suppress_single) = {
+            let config = self.config.read().unwrap();
+            let ih = config.inlay_hints.as_ref();
+            let enabled = ih.and_then(|s| s.enabled).unwrap_or(true);
+            let suppress_single = ih
+                .and_then(|s| s.suppress_for_single_arg_calls)
+                .unwrap_or(false);
+            (enabled, suppress_single)
+        };
+
+        if !enabled {
+            return Ok(Some(vec![]));
+        }
+
+        let hints = self.with_index(|index| {
+            providers::inlay_hints::inlay_hints(
+                &doc.parsed,
+                &doc.line_index,
+                index,
+                uri,
+                suppress_single,
+            )
+        });
+
+        Ok(Some(hints.unwrap_or_default()))
     }
 }
 
