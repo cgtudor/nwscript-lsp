@@ -14,6 +14,10 @@ Language server for **NWScript**, the scripting language used by Neverwinter Nig
 - **Unused Import Detection** -- grayed-out `#include` directives that aren't referenced, with quick-fix removal
 - **Unused Variable Detection** -- grayed-out local variables and parameters that are never used, with quick-fix removal
 - **Unused Function Detection** -- grayed-out functions never referenced anywhere in the workspace, with quick-fix removal
+- **Refactoring: Extract Variable** -- extract an expression to a local variable. Works with cursor position (place cursor on a function call) or selection. Infers the type automatically and triggers rename
+- **Refactoring: Extract Function** -- select statements to extract into a new function. Detects variables from outer scopes and passes them as parameters. Works inside nested blocks (if/else-if/while/for)
+- **Refactoring: Extract to File** -- move a function to a new file. Creates the file, adds `#include`, removes the function from the current file, and opens file rename in the explorer
+- **Auto-update includes on file rename** -- renaming a `.nss` file (in explorer or via Extract to File) automatically updates all `#include` directives across the workspace
 - **Code Lens** -- reference counts above functions, structs, and global variables/constants
 - **Document Links** -- Ctrl+Click `#include` directives to open the resolved file
 - **Inlay Hints** -- parameter name hints at call sites (e.g. `nObjectType: 1, sTemplate: "goblin01"`)

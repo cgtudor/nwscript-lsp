@@ -111,7 +111,10 @@ pub async fn compile_file(
         }
     }
 
-    let mut diags = parse_compiler_output(&combined);
+    let compiled_stem = file_path
+        .file_stem()
+        .and_then(|s| s.to_str());
+    let mut diags = parse_compiler_output(&combined, compiled_stem);
 
     // Adjust diagnostic ranges: use actual content start column instead of 0
     let lines: Vec<&str> = source.lines().collect();
@@ -227,7 +230,10 @@ fn collect_dirs_recursive(dir: &Path, exclude_dirs: &[String], out: &mut Vec<Pat
 }
 
 /// Parse nwn_script_comp output into diagnostics.
-fn parse_compiler_output(output: &str) -> Vec<Diagnostic> {
+/// `compiled_file` is the stem of the file being compiled (e.g. "run_dmcore")
+/// so we can detect errors originating from included files and place them
+/// at the top of the file instead of at a wrong line number.
+fn parse_compiler_output(output: &str, compiled_file: Option<&str>) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     for line in output.lines() {
@@ -236,7 +242,7 @@ fn parse_compiler_output(output: &str) -> Vec<Diagnostic> {
             continue;
         }
 
-        if let Some(diag) = parse_compiler_line(line) {
+        if let Some(diag) = parse_compiler_line(line, compiled_file) {
             diagnostics.push(diag);
         }
     }
@@ -244,9 +250,9 @@ fn parse_compiler_output(output: &str) -> Vec<Diagnostic> {
     diagnostics
 }
 
-fn parse_compiler_line(line: &str) -> Option<Diagnostic> {
+fn parse_compiler_line(line: &str, compiled_file: Option<&str>) -> Option<Diagnostic> {
     // Must start with F or E (fatal/error) or W (warning)
-    let severity = match line.chars().next()? {
+    let _severity = match line.chars().next()? {
         'F' | 'E' => DiagnosticSeverity::ERROR,
         'W' => DiagnosticSeverity::WARNING,
         _ => return None,
@@ -278,16 +284,28 @@ fn parse_compiler_line(line: &str) -> Option<Diagnostic> {
     let (line_num, source_file) = extract_location_info(line);
     let line_num = line_num.unwrap_or(1);
 
-    // Build message with context
-    let message = match source_file {
-        Some(src) => format!("{raw_message} (in {src}:{line_num})"),
-        None => raw_message.to_string(),
+    // If the error is from an included file (not the one being compiled),
+    // show it at line 1 instead of using the included file's line number
+    // which would point to an unrelated line in the current file.
+    let is_from_include = match (&source_file, compiled_file) {
+        (Some(src), Some(compiled)) => {
+            let src_stem = src.strip_suffix(".nss").unwrap_or(src);
+            !src_stem.eq_ignore_ascii_case(compiled)
+        }
+        _ => false,
+    };
+
+    let (message, diag_line) = if is_from_include {
+        let src = source_file.as_deref().unwrap_or("unknown");
+        (format!("{raw_message} (in {src}:{line_num})"), 0)
+    } else {
+        (raw_message.to_string(), line_num.saturating_sub(1))
     };
 
     Some(Diagnostic {
         range: Range::new(
-            Position::new(line_num.saturating_sub(1), 0),
-            Position::new(line_num.saturating_sub(1), 1000),
+            Position::new(diag_line, 0),
+            Position::new(diag_line, 1000),
         ),
         severity: Some(severity),
         source: Some("nwn_script_comp".into()),

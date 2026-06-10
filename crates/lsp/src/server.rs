@@ -421,7 +421,15 @@ impl LanguageServer for NwscriptLanguageServer {
                     prepare_provider: Some(true),
                     work_done_progress_options: Default::default(),
                 })),
-                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(
+                    CodeActionOptions {
+                        code_action_kinds: Some(vec![
+                            CodeActionKind::QUICKFIX,
+                            CodeActionKind::REFACTOR_EXTRACT,
+                        ]),
+                        ..Default::default()
+                    },
+                )),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(true),
                 }),
@@ -447,6 +455,22 @@ impl LanguageServer for NwscriptLanguageServer {
                 document_on_type_formatting_provider: Some(DocumentOnTypeFormattingOptions {
                     first_trigger_character: "}".into(),
                     more_trigger_character: Some(vec![";".into(), "\n".into()]),
+                }),
+                workspace: Some(WorkspaceServerCapabilities {
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        will_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some("file".to_string()),
+                                pattern: FileOperationPattern {
+                                    glob: "**/*.nss".to_string(),
+                                    matches: Some(FileOperationPatternKind::File),
+                                    options: None,
+                                },
+                            }],
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -514,6 +538,78 @@ impl LanguageServer for NwscriptLanguageServer {
 
     async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
         // TODO: re-index changed files
+    }
+
+    async fn will_rename_files(
+        &self,
+        params: RenameFilesParams,
+    ) -> Result<Option<WorkspaceEdit>> {
+        let mut all_changes: std::collections::HashMap<Url, Vec<TextEdit>> =
+            std::collections::HashMap::new();
+
+        for rename in &params.files {
+            let old_path = std::path::Path::new(&rename.old_uri);
+            let new_path = std::path::Path::new(&rename.new_uri);
+
+            let old_stem = old_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let new_stem = new_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+
+            if old_stem.is_empty() || new_stem.is_empty() || old_stem == new_stem {
+                continue;
+            }
+
+            // Search all open documents for #include directives referencing the old name
+            let guard = self.index.read().unwrap();
+            if let Some(index) = guard.as_ref() {
+                for file_uri in index.all_files() {
+                    let source = match index.get_file(&file_uri) {
+                        Some(f) => f.source.clone(),
+                        None => continue,
+                    };
+                    let line_index = nwscript_parser::LineIndex::new(&source);
+
+                    // Find #include "old_stem" and replace with #include "new_stem"
+                    let old_include = format!("#include \"{}\"", old_stem);
+                    let new_include = format!("#include \"{}\"", new_stem);
+
+                    let mut offset = 0;
+                    while let Some(idx) = source[offset..].find(&old_include) {
+                        let abs_start = (offset + idx) as u32;
+                        let abs_end = abs_start + old_include.len() as u32;
+
+                        let (sl, sc) = line_index.line_col(abs_start);
+                        let (el, ec) = line_index.line_col(abs_end);
+
+                        all_changes.entry(file_uri.clone()).or_default().push(
+                            TextEdit {
+                                range: Range::new(
+                                    Position::new(sl, sc),
+                                    Position::new(el, ec),
+                                ),
+                                new_text: new_include.clone(),
+                            },
+                        );
+
+                        offset += idx + old_include.len();
+                    }
+                }
+            }
+        }
+
+        if all_changes.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(WorkspaceEdit {
+                changes: Some(all_changes),
+                ..Default::default()
+            }))
+        }
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -852,9 +948,82 @@ impl LanguageServer for NwscriptLanguageServer {
                 })
             })
             .map(CodeActionOrCommand::CodeAction)
-            .collect();
+            .collect::<Vec<_>>();
 
-        Ok(Some(actions))
+        let mut result = actions;
+
+        // Refactoring actions: computed on-demand.
+        // Extract variable and extract-to-file work with cursor OR selection.
+        // Extract function requires a selection (to know which statements).
+        if let Some(doc) = self.documents.get(uri) {
+            let sel_start = doc
+                .line_index
+                .offset(request_range.start.line, request_range.start.character)
+                .unwrap_or(0);
+            let sel_end = doc
+                .line_index
+                .offset(request_range.end.line, request_range.end.character)
+                .unwrap_or(0);
+
+            let has_selection = sel_start != sel_end;
+
+            let refactor_actions = self.with_index(|index| {
+                let mut actions = Vec::new();
+
+                // Extract variable: works with cursor (finds best expression)
+                // or selection (extracts exactly what's selected)
+                if let Some(action) = providers::refactor::extract_variable(
+                    index,
+                    uri,
+                    &doc.parsed,
+                    &doc.source,
+                    &doc.line_index,
+                    sel_start,
+                    sel_end,
+                ) {
+                    actions.push(action);
+                }
+
+                // Extract function: requires a selection
+                if has_selection {
+                    if let Some(action) = providers::refactor::extract_function(
+                        index,
+                        uri,
+                        &doc.parsed,
+                        &doc.source,
+                        &doc.line_index,
+                        sel_start,
+                        sel_end,
+                    ) {
+                        actions.push(action);
+                    }
+                }
+
+                // Extract to file: works with cursor inside a function
+                if let Some(action) = providers::refactor::extract_to_file(
+                    uri,
+                    &doc.parsed,
+                    &doc.source,
+                    &doc.line_index,
+                    sel_start,
+                    sel_end,
+                ) {
+                    actions.push(action);
+                }
+
+                actions
+            });
+
+            if let Some(refactor_actions) = refactor_actions {
+                result.extend(
+                    refactor_actions
+                        .into_iter()
+                        .map(CodeActionOrCommand::CodeAction),
+                );
+            }
+        }
+
+        Ok(Some(result))
     }
 
     async fn semantic_tokens_full(

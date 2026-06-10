@@ -2,6 +2,7 @@ import * as path from "path";
 import * as fs from "fs";
 import {
   commands,
+  Selection,
   workspace,
   ExtensionContext,
   Position,
@@ -84,6 +85,37 @@ export function activate(context: ExtensionContext) {
       const uri = Uri.parse(uriStr);
       const position = new Position(pos.line, pos.character);
       commands.executeCommand("editor.action.findReferences", uri, position);
+    })
+  );
+
+  // Register command for rename-after-refactor: finds the symbol in the
+  // active editor and triggers rename on it. Used by extract variable/function.
+  context.subscriptions.push(
+    commands.registerCommand("nwscript-lsp.renameSymbol", async (symbolName: string) => {
+      const editor = window.activeTextEditor;
+      if (!editor) return;
+
+      const text = editor.document.getText();
+      // Find the last occurrence (for extract function: the call, not the definition)
+      const idx = text.lastIndexOf(symbolName);
+      if (idx === -1) return;
+
+      const pos = editor.document.positionAt(idx);
+      editor.selection = new Selection(pos, pos);
+      editor.revealRange(editor.selection);
+      await commands.executeCommand("editor.action.rename");
+    })
+  );
+
+  // Register command for rename-after-extract-to-file: reveals the new file
+  // in the explorer and triggers file rename so the user can choose the name.
+  context.subscriptions.push(
+    commands.registerCommand("nwscript-lsp.renameFile", async (uriStr: string) => {
+      const uri = Uri.parse(uriStr);
+      await commands.executeCommand("revealInExplorer", uri);
+      // Small delay to let the explorer focus on the file
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await commands.executeCommand("renameFile");
     })
   );
 

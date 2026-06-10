@@ -7,6 +7,7 @@ pub mod folding;
 pub mod formatting;
 pub mod hover;
 pub mod inlay_hints;
+pub mod refactor;
 pub mod references;
 pub mod semantic_tokens;
 pub mod signature;

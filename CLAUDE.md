@@ -36,6 +36,7 @@ crates/
         inlay_hints.rs # Parameter name hints at call sites
         folding.rs     # Folding ranges (functions, structs, blocks, includes, comments)
         actions.rs     # Code actions (remove unused imports, remove unused variables/functions)
+        refactor.rs    # Refactoring code actions (extract variable/function/to file)
         code_lens.rs   # Reference counts above functions, structs, and global vars/constants
         document_links.rs # Clickable #include directives
 editors/
@@ -52,7 +53,7 @@ bin/
 # Check compilation (fast)
 cargo check
 
-# Run all tests (87 tests: lexer, parser, formatter, providers, nasher, integration)
+# Run all tests (107 tests: lexer, parser, formatter, providers, refactor, nasher, integration)
 cargo test
 
 # Build release binary (Windows)
@@ -108,6 +109,7 @@ npx @vscode/vsce publish --packagePath nwscript-lsp-win32-x64-VERSION.vsix nwscr
 - **Nasher cache compilation** — writes current source INTO the nasher cache (`.nasher/cache/<target>/`), compiles from there, then restores the original. This matches how nasher itself compiles and ensures the compiler's resman resolves workspace overrides correctly over NWN key/bif files
 - **Why not temp files** — the compiler adds the compiled file's directory to resman at a priority that differs from `--dirs`. Compiling from outside the cache causes false duplicate-function errors
 - **Flags** — `-s` (simulate), `-n` (no entry point), `-E` (all errors), `--quiet`, `--dirs <cache>`
+- **Include-file errors** — when the compiler reports an error from an included file (e.g. `_tdn_handlefeats.nss(101)`), the diagnostic is placed at line 1 of the compiled file with the origin in the message (e.g. `INVALID DECLARATION TYPE (in _tdn_handlefeats.nss:101)`). This prevents errors from landing on unrelated lines when the line number belongs to a different file
 
 ### Auto-Import (completion.rs)
 - Completion shows ALL workspace symbols (~2700+), not just those from the current include tree
@@ -204,6 +206,19 @@ Users should also set in their VS Code settings:
 - Variables prefixed with `_` are exempt (intentionally unused convention)
 - Produces `DiagnosticTag::UNNECESSARY` hints (grayed out) + quickfix code actions to remove variable declarations
 - Parameters get diagnostics but no removal quickfix (removing a param breaks the function signature)
+
+### Refactoring Code Actions (refactor.rs)
+- **Extract Variable** — works with cursor position OR selection. Cursor on a function name like `StringToInt` extracts the whole call; cursor on a bare identifier walks up to the parent compound expression. Selection extracts exactly what's selected. Infers type from AST context (function return types, literal types, operator result types, local variable types). Inserts declaration before the containing statement with correct indentation. Correctly scopes into nested blocks (if/else-if/while/for/switch). Triggers rename after extraction via `nwscript-lsp.renameSymbol` extension command
+- **Extract Function** — select one or more statements (works inside nested blocks). Finds the innermost block containing the selection via `find_innermost_block`. Detects free variables by walking the entire function body for declarations before the selection offset (not just the immediate block). Passes them as function parameters. Handles return statements by using the enclosing function's return type. Triggers rename after extraction
+- **Extract to File** — cursor inside a function definition moves it to a new file. Uses `DocumentChanges::Operations` with `CreateFile` + `TextDocumentEdit` to properly create the new file. Copies all `#include` directives, removes the function (and its prototype if present), adds an `#include` for the new file. Respects the 16-character resref limit. Triggers file rename in explorer via `nwscript-lsp.renameFile` extension command
+- All three are `CodeActionKind::REFACTOR_EXTRACT`, computed on-demand (not cached)
+- Advertised via `CodeActionProviderCapability::Options` with `QUICKFIX` and `REFACTOR_EXTRACT` kinds
+- **Extension commands**: `nwscript-lsp.renameSymbol` (finds symbol by name, positions cursor, triggers rename) and `nwscript-lsp.renameFile` (reveals file in explorer, triggers file rename)
+
+### File Rename Support (server.rs — will_rename_files)
+- Handles `workspace/willRenameFiles` for `.nss` files
+- When a `.nss` file is renamed (e.g. via Extract to File's rename flow or manually), scans all indexed files for `#include "old_name"` and returns a `WorkspaceEdit` replacing them with `#include "new_name"`
+- Registered via `WorkspaceServerCapabilities.file_operations.will_rename` with glob `**/*.nss`
 
 ### Initializer Value Hover
 - `SymbolInfo.initializer_text` stores the raw expression text from `VarDecl.initializer`

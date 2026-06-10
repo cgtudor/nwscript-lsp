@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.0
+
+### New Features
+
+- **Extract Variable** -- place your cursor on an expression (e.g. a function call like `StringToInt(...)`) or select one, then use the lightbulb (Ctrl+.) to extract it into a local variable. The type is inferred automatically. Triggers rename so you can immediately name the variable.
+- **Extract Function** -- select one or more statements and extract them into a new function. Variables from outer scopes are automatically detected and passed as parameters. Works inside nested blocks (if/else-if/while/for/switch).
+- **Extract to File** -- place your cursor inside a function and move it to a new file. Creates the file with all necessary `#include` directives, removes the function (and its prototype) from the current file, adds an `#include` for the new file, and opens file rename in the explorer so you can choose the filename.
+- **Auto-update includes on file rename** -- renaming a `.nss` file in the explorer automatically updates all `#include` directives referencing it across the workspace.
+
+### Improvements
+
+- **Compiler diagnostics from included files** -- errors originating from included files (e.g. `_tdn_handlefeats.nss:101`) are now shown at the top of the compiled file with the source location in the message, instead of landing on an unrelated line number.
+
 ## 1.4.0
 
 ### New Features
