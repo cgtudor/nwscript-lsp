@@ -14,6 +14,7 @@ import {
   LanguageClientOptions,
   ServerOptions,
 } from "vscode-languageclient/node";
+import { NuiPreviewPanel } from "./nuiPreview";
 
 let client: LanguageClient | undefined;
 
@@ -31,6 +32,10 @@ export function activate(context: ExtensionContext) {
     );
     if (fs.existsSync(bundledPath)) {
       serverPath = bundledPath;
+      // Ensure execute permission on Linux/macOS (VSIX ZIP doesn't preserve it)
+      if (process.platform !== "win32") {
+        try { fs.chmodSync(bundledPath, 0o755); } catch {}
+      }
     } else {
       // Fall back to PATH
       serverPath = process.platform === "win32" ? "nwscript-lsp.exe" : "nwscript-lsp";
@@ -118,6 +123,24 @@ export function activate(context: ExtensionContext) {
       await commands.executeCommand("renameFile");
     })
   );
+
+  // Register NUI preview command
+  context.subscriptions.push(
+    commands.registerCommand("nwscript-lsp.openNuiPreview", async () => {
+      const editor = window.activeTextEditor;
+      if (!editor || editor.document.languageId !== "nwscript") {
+        window.showInformationMessage("Open an NWScript file to preview NUI.");
+        return;
+      }
+      await NuiPreviewPanel.createOrShow(context.extensionUri, editor.document);
+    })
+  );
+
+  // Invalidate include cache when .nss files change on disk
+  const watcher = workspace.createFileSystemWatcher("**/*.nss");
+  watcher.onDidCreate(() => NuiPreviewPanel.invalidateIncludes());
+  watcher.onDidDelete(() => NuiPreviewPanel.invalidateIncludes());
+  context.subscriptions.push(watcher);
 
   client.start();
 }

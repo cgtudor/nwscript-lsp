@@ -2,7 +2,7 @@
   "name": "nwscript-lsp",
   "displayName": "NWScript Language Server",
   "description": "Language server for NWScript (Neverwinter Nights scripting language) — completions, diagnostics, go-to-definition, hover, formatting, and more.",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "publisher": "krezk",
   "license": "MIT",
   "icon": "icon.png",
@@ -43,6 +43,23 @@
         "path": "./syntaxes/nwscript.tmLanguage.json"
       }
     ],
+    "commands": [
+      {
+        "command": "nwscript-lsp.openNuiPreview",
+        "title": "Open NUI Preview",
+        "category": "NWScript",
+        "icon": "$(open-preview)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "when": "resourceLangId == nwscript",
+          "command": "nwscript-lsp.openNuiPreview",
+          "group": "navigation"
+        }
+      ]
+    },
     "configurationDefaults": {
       "[nwscript]": {
         "editor.defaultFormatter": "krezk.nwscript-lsp",

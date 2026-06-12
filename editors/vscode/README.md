@@ -27,6 +27,7 @@ Language server for **NWScript**, the scripting language used by Neverwinter Nig
 - **Code Formatting** -- full document, range, and on-type formatting with configurable style
 - **Semantic Highlighting** -- AST-based highlighting for function calls, parameters, struct names, and field access
 - **Syntax Highlighting** -- TextMate grammar for NWScript
+- **(Experimental) NUI Preview** -- visual preview of NUI window layouts with screen resolution and UI scale simulation
 
 ## Setup
 
@@ -119,6 +120,33 @@ To enable format-on-type (auto-formats as you type `}`, `;`, and `Enter`):
 | `formatter.spaceInsideParens` | `false` | `( x )` vs `(x)` |
 | `formatter.spaceAroundOperators` | `true` | `a + b` vs `a+b` |
 | `formatter.spaceAfterComma` | `true` | `f(a, b)` vs `f(a,b)` |
+
+## NUI Preview (Experimental)
+
+Files containing NUI window definitions (`NuiWindow` / `NuiCreate` calls) show a preview button in the editor toolbar. The preview evaluates the NWScript code and renders an approximate visual layout of the NUI window.
+
+### Controls
+
+- **Function** -- select which NUI-building function to evaluate (auto-detected)
+- **Screen** -- simulate different screen resolutions (affects available UI scale options)
+- **UI Scale** -- simulate NWN:EE UI scaling (valid range computed from resolution, matching the engine's `min(width/900, height/700)` formula)
+- **Fit** -- toggle between fitting the NUI window to the panel ("Window") or showing it proportionally within a screen frame ("Screen")
+- **Views** -- for NUIs with swappable layouts (tabs, multi-view windows), switch between different view-builder functions
+
+### Layout Accuracy
+
+The preview approximates NWN:EE's kiwi/Cassowary constraint-based layout engine:
+
+- Element sizes (`NuiWidth`, `NuiHeight`) scale with UI scale
+- Margins (`NuiMargin`) do **not** scale (known engine behavior)
+- List cell widths and row heights follow engine rules for fixed vs. variable cells
+- Window body scrolls when content overflows, matching in-game behavior
+
+### Limitations
+
+- The preview is an approximation -- exact pixel values may differ from in-game
+- Bind values show as `[bind_name]` placeholders
+- Some engine-dependent functions (database queries, object lookups) return defaults
 
 ## Project Structure Support
 

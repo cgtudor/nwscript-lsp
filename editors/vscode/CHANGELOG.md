@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.0
+
+### Fixes
+
+- **Linux: auto-set execute permission** -- the bundled LSP binary now gets `chmod +x` automatically on activation, so Linux users no longer need to manually set execute permissions after install.
+
+### New Features
+
+- **(EXPERIMENTAL) NUI Preview** -- Files that are recognized to contain NUI windows now have the option to open a preview that shows approximately what the layout of the built NUI window will look like. Features include:
+  - Layout solver approximating NWN:EE's kiwi/Cassowary constraint engine
+  - Screen resolution and UI scale simulation with resolution-aware scale options matching the engine's formula
+  - Scrollable window body when content overflows (matching in-game behavior)
+  - View switching for NUIs with swappable group layouts (tabs, multi-view windows)
+  - Fairly accurate rendering of rows, columns, groups, lists, buttons, labels, text edits, and more
+
 ## 1.5.0
 
 ### New Features

@@ -41,7 +41,16 @@ crates/
         document_links.rs # Clickable #include directives
 editors/
   vscode/          # VS Code extension (thin TypeScript client)
-    src/extension.ts
+    src/
+      extension.ts           # Extension entry point
+      nuiPreview.ts          # NUI preview panel (webview lifecycle, re-solve on scale/view change)
+      nwscript/
+        interpreter.ts       # NWScript interpreter (evaluates NUI code, intercepts NUI calls)
+        layoutSolver.ts      # NUI layout solver (Cassowary approximation with scale support)
+        nui-builtins.ts      # NUI function implementations (NuiCol, NuiRow, NuiList, etc.)
+        includeResolver.ts   # #include resolution for NUI preview
+      webview/
+        previewHtml.ts       # Preview webview (HTML/CSS/JS with scale/resolution/view controls)
     syntaxes/nwscript.tmLanguage.json  # TextMate grammar for syntax highlighting
 bin/
   win64/           # Bundled nwn_script_comp.exe compiler binary
@@ -219,6 +228,13 @@ Users should also set in their VS Code settings:
 - Handles `workspace/willRenameFiles` for `.nss` files
 - When a `.nss` file is renamed (e.g. via Extract to File's rename flow or manually), scans all indexed files for `#include "old_name"` and returns a `WorkspaceEdit` replacing them with `#include "new_name"`
 - Registered via `WorkspaceServerCapabilities.file_operations.will_rename` with glob `**/*.nss`
+
+### NUI Preview (editors/vscode/)
+- **Interpreter** (`interpreter.ts`) — evaluates NWScript to produce NUI window JSON. Intercepts `NuiCreate`, `NuiWindow`, `NuiSetBind` (geometry capture), and `NuiSetGroupLayout` (view switching). Detects view-builder functions by probing 0-param functions that return NUI layout JSON
+- **Layout solver** (`layoutSolver.ts`) — approximates NWN:EE's kiwi/Cassowary layout engine. Key constants: `GAP=8` (unscaled default margin spacing), `BODY_PAD_X=10`, `BODY_PAD_Y=16` (unscaled Nuklear window padding), `TITLE_BAR_H=28` (scales with UI). Scale affects: window dimensions, title bar, NuiWidth/NuiHeight, NuiPadding, row_height. Scale does NOT affect: GAP, BODY_PAD, NuiMargin (known engine bug)
+- **Webview** (`previewHtml.ts`) — renders solved layout as absolutely-positioned HTML elements inside a scrollable window body. Controls: function selector, screen resolution, UI scale (dynamically populated from `min(w/900,h/700)` formula), fit mode (Window/Screen), view switcher
+- **Preview panel** (`nuiPreview.ts`) — manages webview lifecycle, handles re-solve requests (scale changes, view switches). Stores interpreter instance for view switching without re-evaluation
+- **Scale behavior** — verified via ReVa + community reports: element sizes scale, margins don't, list cell spacing doesn't. Unscaled overhead (GAP+padding) becomes proportionally smaller at higher scales, explaining why tight layouts overflow at 1.0x but fit at 2.2x
 
 ### Initializer Value Hover
 - `SymbolInfo.initializer_text` stores the raw expression text from `VarDecl.initializer`
