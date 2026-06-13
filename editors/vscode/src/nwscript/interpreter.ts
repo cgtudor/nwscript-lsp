@@ -2,6 +2,7 @@ import { Expr, Stmt, Program, Param, Value, BreakSignal, ContinueSignal, ReturnS
 import { lex } from './lexer';
 import { parse } from './parser';
 import { NUI_CONSTANTS, JSON_CONSTANTS, jsonBuiltins, nuiBuiltins, engineMocks } from './nui-builtins';
+import { FrameworkBuilder } from './framework-builder';
 
 // ── Environment (scoped variable storage) ────────────────────
 
@@ -50,6 +51,10 @@ class Interpreter {
   private windowJson: Value = null;
   private windowGeometry: { x: number; y: number; w: number; h: number } | null = null;
   private lastGroupId: string | null = null;  // last group ID used in NuiSetGroupLayout
+  // When set, the TDN nui_i_library framework is in use: its private engine helpers
+  // (nui_SetObject, nui_IncrementPath, ...) are routed here instead of running their
+  // SQLite-backed NWScript bodies. Null for vanilla nw_inc_nui.nss forms.
+  private framework: FrameworkBuilder | null = null;
 
   constructor() {
     this.globals = new Env();
@@ -436,6 +441,17 @@ class Interpreter {
           return; // void no-ops
         }
 
+        // TDN framework engine interception: when the nui_i_library framework is
+        // active, its private builder helpers are routed to the FrameworkBuilder
+        // instead of running their SQLite-backed bodies. This must come before the
+        // user-function dispatch so the included nui_i_main.nss bodies are bypassed.
+        // The public NUI_* functions (NUI_AddColumn, NUI_BindLabel, ...) are NOT in
+        // this table — their real bodies run and funnel into these private helpers.
+        if (this.framework) {
+          const fh = FRAMEWORK_HELPERS[expr.callee];
+          if (fh) return fh(this.framework, args);
+        }
+
         // Check user-defined functions FIRST (from included .nss files)
         // This lets nw_inc_nui.nss definitions override the fallback builtins
         const userFunc = this.functions.get(expr.callee);
@@ -651,7 +667,68 @@ class Interpreter {
   getWindowGeometry(): { x: number; y: number; w: number; h: number } | null {
     return this.windowGeometry;
   }
+
+  /** Activate the TDN nui_i_library framework engine for this run. */
+  setFramework(builder: FrameworkBuilder): void {
+    this.framework = builder;
+  }
+
+  /** Read a numeric top-level global (e.g. FORM_WIDTH). Returns null if absent/non-numeric. */
+  getGlobalNumber(name: string): number | null {
+    if (!this.globals.has(name)) return null;
+    const v = this.globals.get(name);
+    return typeof v === 'number' && isFinite(v) ? v : null;
+  }
 }
+
+// ── TDN framework private-helper interception table ──────────────────────────
+// Maps the nui_i_main.nss private engine function names to FrameworkBuilder
+// methods. Default-arg semantics mirror the NWScript prototypes (missing call
+// args fall back to the prototype default).
+
+const FRAMEWORK_HELPERS: Record<string, (b: FrameworkBuilder, args: Value[]) => Value> = {
+  nui_SaveForm: (b, a) => { b.saveForm(String(a[0] ?? ''), String(a[1] ?? '')); return undefined; },
+  nui_DeleteForm: (b, a) => { b.deleteForm(String(a[0] ?? '')); return undefined; },
+  nui_GetForm: (b, a) => b.getForm(String(a[0] ?? '')),
+  nui_GetDefinitionValue: (b, a) => b.getDefinitionValue(String(a[0] ?? ''), String(a[1] ?? '')),
+
+  nui_SetObject: (b, a) => { b.setObject(String(a[0] ?? ''), String(a[1] ?? ''), String(a[2] ?? '')); return undefined; },
+  nui_SetControl: (b, a) => { b.setObject('', String(a[0] ?? ''), String(a[1] ?? '')); return undefined; },
+  nui_SetProperty: (b, a) => { b.setObject(String(a[0] ?? ''), String(a[1] ?? '')); return undefined; },
+
+  nui_IncrementPath: (b, a) => b.incrementPath(String(a[0] ?? ''), !!a[1]),
+  nui_DecrementPath: (b, a) => b.decrementPath(a.length ? (a[0] as number) : 1),
+  nui_SubstitutePath: (b, a) => b.substitutePath(String(a[0] ?? '')),
+  nui_GetSubstitutedPath: (b, a) => b.getSubstitutedPath(String(a[0] ?? '')),
+  nui_GetGroupKey: (b) => b.getGroupKey(),
+
+  nui_SetPath: (b, a) => b.setPath(String(a[0] ?? '')),
+  nui_GetPath: (b) => b.getPath(),
+  nui_ResetPath: (b) => { b.resetPath(); return undefined; },
+
+  nui_ToggleIncrementFlag: (b, a) => b.toggleIncrementFlag(a.length ? (a[0] as number) : -1),
+  nui_GetIncrementFlag: (b) => b.getIncrementFlag(),
+  nui_ToggleDrawlistFlag: (b, a) => b.toggleDrawlistFlag(a.length ? (a[0] as number) : -1),
+  nui_GetDrawlistFlag: (b) => b.getDrawlistFlag(),
+  nui_ToggleListboxFlag: (b, a) => b.toggleListboxFlag(a.length ? (a[0] as number) : -1),
+  nui_GetListboxFlag: (b) => b.getListboxFlag(),
+  nui_ToggleDefinitionFlag: (b, a) => b.toggleDefinitionFlag(a.length ? (a[0] as number) : -1),
+  nui_GetDefinitionFlag: (b) => b.getDefinitionFlag(),
+
+  nui_SetControlType: (b, a) => { b.setControlType(String(a[0] ?? '')); return undefined; },
+  nui_GetControlType: (b) => b.getControlType(),
+
+  nui_GetEntryCount: (b) => b.getEntryCount(),
+  nui_ResetEntryCount: (b) => { b.resetEntryCount(); return undefined; },
+  nui_IncrementEntryCount: (b, a) => b.incrementEntryCount(a.length ? (a[0] as number) : 1),
+
+  nui_SetFormID: (b, a) => { b.setFormId(String(a[0] ?? '')); return undefined; },
+  nui_GetFormID: (b) => b.getFormId(),
+  nui_SetFormfile: (b, a) => { b.setFormfile(String(a[0] ?? '')); return undefined; },
+  nui_GetFormfile: (b) => b.getFormfile(),
+
+  nui_ClearVariables: (b) => { b.clearVariables(); return undefined; },
+};
 
 // ── AST Scanning ─────────────────────────────────────────────
 
@@ -666,6 +743,19 @@ function findNuiFunctions(program: Program): string[] {
     }
   }
   return hits;
+}
+
+/**
+ * Detect a TDN nui_i_library framework form: a DefineForm() whose body calls
+ * NUI_CreateForm. Returns the entry function name ("DefineForm") or null.
+ */
+function findFrameworkEntry(program: Program): string | null {
+  for (const stmt of program.stmts) {
+    if (stmt.kind === 'func_decl' && stmt.name === 'DefineForm' && stmt.body.length > 0) {
+      if (astContainsCall(stmt.body, ['NUI_CreateForm'])) return 'DefineForm';
+    }
+  }
+  return null;
 }
 
 /** Check if a value looks like a NUI layout element (col, row, group, etc.) */
@@ -746,6 +836,50 @@ export function evaluateNuiScript(source: string, functionName?: string): EvalRe
   }
 
   const allFunctions = interp.getFunctionNames();
+
+  // ── TDN nui_i_library framework path ──────────────────────────────────────
+  // These forms build their window via stateful NUI_* builder calls (DefineForm)
+  // backed by a JSON-path engine, not via NuiWindow/NuiCreate. Detect and route
+  // through the FrameworkBuilder. (Vanilla forms fall through to the path below.)
+  const frameworkEntry = findFrameworkEntry(program);
+  if (frameworkEntry && !functionName) {
+    const builder = new FrameworkBuilder();
+    interp.setFramework(builder);
+    try {
+      interp.callFunction(frameworkEntry, []);
+    } catch (e: any) {
+      if (!(e instanceof ReturnSignal)) errors.push(`Runtime error in ${frameworkEntry}: ${e.message}`);
+    }
+
+    const windowJson = builder.getMainForm();
+
+    // DefineForm only binds geometry (it's set at runtime in HandleNUIEvents).
+    // Fall back to the form's declared FORM_WIDTH/FORM_HEIGHT consts if present.
+    let geometry = interp.getWindowGeometry();
+    if (!geometry) {
+      const w = interp.getGlobalNumber('FORM_WIDTH');
+      const h = interp.getGlobalNumber('FORM_HEIGHT');
+      if (w && h && w > 50 && h > 50) geometry = { x: 0, y: 0, w, h };
+    }
+
+    const relevantErrors = interp.errors.filter(
+      (e) => e && !e.startsWith('Unknown function:') && !e.startsWith('Unknown identifier:')
+    );
+    errors.push(...relevantErrors);
+
+    return {
+      json: windowJson,
+      // A framework file builds exactly one form (its DefineForm). The dropdown is
+      // informational (no re-eval handler), so list just the entry rather than the
+      // flood of included nui_i_main.nss / util builder functions.
+      errors: errors.filter((e) => e),
+      functions: [frameworkEntry],
+      geometry,
+      views: [],
+      swapGroupId: null,
+      interpreter: interp,
+    };
+  }
 
   // Find functions that actually build NUI windows (contain NuiWindow/NuiCreate calls)
   const nuiFunctions = findNuiFunctions(program);

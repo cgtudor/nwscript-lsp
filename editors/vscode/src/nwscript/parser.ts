@@ -9,6 +9,10 @@ export class ParseError extends Error {
 
 export function parse(tokens: Token[]): Program {
   let pos = 0;
+  // Extra declarators from a comma-separated decl (e.g. `string a, b = "x";`)
+  // are produced as separate var_decl statements and queued here, then drained
+  // by the statement collectors (parseBlock / parseProgram) into the same scope.
+  const pendingStmts: Stmt[] = [];
 
   function peek(): Token { return tokens[pos] ?? { type: TT.Eof, value: '', line: 0, col: 0 }; }
   function advance(): Token { return tokens[pos++]; }
@@ -42,6 +46,7 @@ export function parse(tokens: Token[]): Program {
     while (!at(TT.Eof)) {
       try {
         stmts.push(parseTopLevel());
+        while (pendingStmts.length) stmts.push(pendingStmts.shift()!);
       } catch (e) {
         // Skip to next semicolon or brace on error
         while (!at(TT.Eof) && !at(TT.Semi) && !at(TT.RBrace)) advance();
@@ -122,6 +127,13 @@ export function parse(tokens: Token[]): Program {
     if (match(TT.Eq)) {
       init = parseExpr();
     }
+    // Comma-separated globals: `int a, b = 1;`
+    while (match(TT.Comma)) {
+      const name2 = expect(TT.Ident).value;
+      let init2: Expr | null = null;
+      if (match(TT.Eq)) init2 = parseExpr();
+      pendingStmts.push({ kind: 'var_decl', type, name: name2, init: init2 });
+    }
     expect(TT.Semi);
     return { kind: 'var_decl', type, name, init };
   }
@@ -160,6 +172,7 @@ export function parse(tokens: Token[]): Program {
     const stmts: Stmt[] = [];
     while (!at(TT.RBrace) && !at(TT.Eof)) {
       stmts.push(parseStmt());
+      while (pendingStmts.length) stmts.push(pendingStmts.shift()!);
     }
     expect(TT.RBrace);
     return stmts;
@@ -219,6 +232,14 @@ export function parse(tokens: Token[]): Program {
       if (match(TT.Eq)) {
         init = parseExpr();
       }
+      // Comma-separated declarators share the same type: `int a, b = 1, c;`.
+      // The first becomes this statement; the rest are queued for the collector.
+      while (match(TT.Comma)) {
+        const name2 = expect(TT.Ident).value;
+        let init2: Expr | null = null;
+        if (match(TT.Eq)) init2 = parseExpr();
+        pendingStmts.push({ kind: 'var_decl', type, name: name2, init: init2 });
+      }
       expect(TT.Semi);
       return { kind: 'var_decl', type, name, init };
     }
@@ -236,15 +257,9 @@ export function parse(tokens: Token[]): Program {
     const then = at(TT.LBrace) ? parseBlock() : [parseStmt()];
     let else_: Stmt[] | null = null;
     if (match(TT.KwElse)) {
-      if (at(TT.KwIf)) {
-        // else if — wrap in array
-        else_ = [{ kind: 'if', cond: { kind: 'bool_lit', value: true }, then: [], else_: null, ...parseIf() as any }];
-        // Actually, let's just recurse properly
-        const elifStmt = parseIf();
-        else_ = [elifStmt];
-      } else {
-        else_ = at(TT.LBrace) ? parseBlock() : [parseStmt()];
-      }
+      // `else if (...)` is just an else-branch whose single statement is an if;
+      // parseStmt() consumes the leading `if` and recurses into parseIf().
+      else_ = at(TT.LBrace) ? parseBlock() : [parseStmt()];
     }
     return { kind: 'if', cond, then, else_ };
   }

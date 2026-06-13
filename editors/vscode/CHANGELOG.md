@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.2
+
+### New Features
+
+- **NUI Preview: `nui_i_library` framework support** -- The preview now renders forms built with tinygiant's `nui_i_library` framework (stateful `NUI_CreateForm` / `NUI_Add*` / `NUI_Set*` / `NUI_Bind*` builder calls in a `DefineForm` function), not just vanilla `nw_inc_nui.nss` forms. The framework's `DefineForm` is detected and built faithfully, with window size taken from the form's `FORM_WIDTH`/`FORM_HEIGHT` constants. Vanilla form behavior is unchanged.
+
+### Fixes
+
+- **NUI Preview parser** -- Fixed comma-separated variable declarations (`string a, b = "x";`) and `else if` chains, which previously desynced the preview parser and could produce empty or partial previews for larger files.
+
 ## 1.6.1
 
 ### Fixes
