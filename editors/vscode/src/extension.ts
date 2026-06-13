@@ -132,7 +132,7 @@ export function activate(context: ExtensionContext) {
         window.showInformationMessage("Open an NWScript file to preview NUI.");
         return;
       }
-      await NuiPreviewPanel.createOrShow(context.extensionUri, editor.document);
+      await NuiPreviewPanel.createOrShow(context.extensionUri, editor.document, context.workspaceState);
     })
   );
 

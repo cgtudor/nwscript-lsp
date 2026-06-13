@@ -1,10 +1,15 @@
 # Changelog
 
-## 1.6.2
+## 1.7.0
 
 ### New Features
 
 - **NUI Preview: `nui_i_library` framework support** -- The preview now renders forms built with tinygiant's `nui_i_library` framework (stateful `NUI_CreateForm` / `NUI_Add*` / `NUI_Set*` / `NUI_Bind*` builder calls in a `DefineForm` function), not just vanilla `nw_inc_nui.nss` forms. The framework's `DefineForm` is detected and built faithfully, with window size taken from the form's `FORM_WIDTH`/`FORM_HEIGHT` constants. Vanilla form behavior is unchanged.
+- **NUI Preview: bind values** -- Bound properties (`{ "bind": "pc_name" }`) that previously rendered as literal `[pc_name]` tokens are now populated, so forms preview with realistic content. Works for both vanilla `nw_inc_nui.nss` and tinygiant's framework forms.
+  - **Automatic placeholders** -- every bind is filled with a sensible sample value inferred from where it is used (labels/text get readable strings, `row_count` fills a few list rows, checkboxes/visibility get booleans, sliders get numbers, color binds get a color, combo/option lists get sample entries).
+  - **Bind inspector** -- a new **Binds** toggle opens a side panel listing every bind in the form with a type-appropriate editor (text, number, checkbox, color, list). Edits update the preview live, including list row counts.
+  - **Presets** -- switch between built-in datasets (**Typical**, **Empty**, **Overflow** for testing text wrapping, **Max rows** for testing list growth), or save your own named preset per form.
+
 
 ### Fixes
 

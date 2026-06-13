@@ -644,13 +644,22 @@ class Interpreter {
       if (p.type === 'json') return null;
       return 0;
     });
+    // Probing is side-effecting: the probed function may itself call
+    // NuiWindow/NuiCreate (some "view" candidates are actually full window
+    // builders), which would clobber the already-captured main window. Snapshot
+    // and restore the capture state so probing never corrupts it.
+    const savedJson = this.windowJson;
+    const savedGeometry = this.windowGeometry;
+    const savedGroupId = this.lastGroupId;
     try {
       const result = this.callFunction(funcName, args);
       if (isNuiLayout(result)) return result;
     } catch (e: any) {
-      if (!(e instanceof ReturnSignal)) return null;
-      const val = (e as any).value;
-      if (isNuiLayout(val)) return val;
+      if (e instanceof ReturnSignal && isNuiLayout((e as any).value)) return (e as any).value;
+    } finally {
+      this.windowJson = savedJson;
+      this.windowGeometry = savedGeometry;
+      this.lastGroupId = savedGroupId;
     }
     return null;
   }
@@ -737,6 +746,11 @@ function findNuiFunctions(program: Program): string[] {
   const hits: string[] = [];
   for (const stmt of program.stmts) {
     if (stmt.kind === 'func_decl' && stmt.body.length > 0) {
+      // Skip the framework's own API (NUI_DisplayForm/NUI_CreateForm/... from
+      // nui_i_main.nss). These contain NuiCreate but are never the user's form
+      // builder; a vanilla form may transitively include the framework, and we
+      // must not mistake NUI_DisplayForm for its builder.
+      if (/^(NUI_|nui_)/.test(stmt.name)) continue;
       if (astContainsCall(stmt.body, ['NuiWindow', 'NuiCreate'])) {
         hits.push(stmt.name);
       }
@@ -756,6 +770,27 @@ function findFrameworkEntry(program: Program): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Determine the builder/entry function defined *in a single file's own source*
+ * (before includes are expanded). Used so the preview targets the form in the
+ * file the user is editing, not a builder pulled in transitively from an include
+ * (e.g. opening pc_edit_nui.nss must not render a "SubSpell" window defined in a
+ * deeply-included file). Returns the framework DefineForm, else the first
+ * non-framework NuiWindow/NuiCreate function, else null.
+ */
+export function findEntryFunction(source: string): string | null {
+  let program: Program;
+  try {
+    program = parse(lex(source));
+  } catch {
+    return null;
+  }
+  const fw = findFrameworkEntry(program);
+  if (fw) return fw;
+  const nui = findNuiFunctions(program);
+  return nui.length > 0 ? nui[0] : null;
 }
 
 /** Check if a value looks like a NUI layout element (col, row, group, etc.) */
@@ -842,7 +877,7 @@ export function evaluateNuiScript(source: string, functionName?: string): EvalRe
   // backed by a JSON-path engine, not via NuiWindow/NuiCreate. Detect and route
   // through the FrameworkBuilder. (Vanilla forms fall through to the path below.)
   const frameworkEntry = findFrameworkEntry(program);
-  if (frameworkEntry && !functionName) {
+  if (frameworkEntry && (!functionName || functionName === frameworkEntry)) {
     const builder = new FrameworkBuilder();
     interp.setFramework(builder);
     try {
@@ -890,9 +925,9 @@ export function evaluateNuiScript(source: string, functionName?: string): EvalRe
     if (nuiFunctions.length > 0) {
       targetFunc = nuiFunctions[0];
     } else {
-      // Fallback: try name-based matching
+      // Fallback: name-based matching, excluding framework API (NUI_*/nui_*)
       targetFunc = allFunctions.find(f =>
-        /nui|NUI|Nui|Open|Show|Create|Display/i.test(f)
+        !/^(NUI_|nui_)/.test(f) && /nui|Nui|Open|Show|Create|Display/i.test(f)
       );
     }
   }

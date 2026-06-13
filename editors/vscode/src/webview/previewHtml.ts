@@ -24,8 +24,8 @@ export function getWebviewContent(
     min-height: 100vh;
   }
   .toolbar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 0; margin-bottom: 8px; flex-shrink: 0;
+    display: flex; align-items: center; gap: 8px 10px;
+    padding: 6px 0; margin-bottom: 8px; flex-shrink: 0; flex-wrap: wrap;
   }
   .toolbar label { font-size: 12px; opacity: 0.8; }
   .toolbar select, .toolbar input[type="number"] {
@@ -188,6 +188,42 @@ export function getWebviewContent(
 
   .nui-bind { color: #888; font-style: italic; font-family: monospace; font-size: 0.77em; }
   .nui-spacer-el { /* invisible */ }
+
+  /* ── Bind inspector ── */
+  .main-row { flex: 1; display: flex; min-height: 0; gap: 8px; }
+  .toolbar button {
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+    border: none; border-radius: 3px; padding: 3px 9px; font-size: 12px; cursor: pointer;
+  }
+  .toolbar button.active { background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff); }
+  .bind-panel {
+    width: 300px; flex-shrink: 0; overflow-y: auto;
+    border-left: 1px solid var(--vscode-input-border, #555);
+    padding: 0 4px 0 10px; display: flex; flex-direction: column;
+  }
+  .bind-panel-header, .bind-panel-footer { display: flex; gap: 6px; align-items: center; padding: 4px 0; flex-shrink: 0; }
+  .bind-panel-footer { border-top: 1px solid #444; margin-top: 6px; }
+  #bind-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .bind-row { display: flex; flex-direction: column; gap: 3px; margin-bottom: 9px; }
+  .bind-row .bl { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .bind-row .bname { font-family: monospace; font-size: 11px; word-break: break-all; }
+  .bind-row .bkind { font-size: 9px; opacity: 0.45; text-transform: uppercase; flex-shrink: 0; letter-spacing: 0.3px; }
+  .bind-row.bind-bool .bl { justify-content: flex-start; gap: 8px; }
+  .bind-panel input[type=text], .bind-panel input[type=number], .bind-panel select {
+    width: 100%; background: var(--vscode-input-background, #3c3c3c);
+    color: var(--vscode-input-foreground, #ccc); border: 1px solid var(--vscode-input-border, #555);
+    border-radius: 3px; padding: 2px 6px; font-size: 12px;
+  }
+  .bind-panel input[type=color] { width: 40px; height: 22px; padding: 0; border: 1px solid var(--vscode-input-border, #555); background: none; }
+  .bind-panel button {
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+    border: none; border-radius: 3px; padding: 3px 9px; font-size: 12px; cursor: pointer; flex-shrink: 0;
+  }
+  .bind-panel button:hover, .toolbar button:hover { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
+  .bind-empty { opacity: 0.5; font-style: italic; padding: 12px 0; }
+  .nui-disabled { opacity: 0.4; }
 </style>
 </head>
 <body>
@@ -217,10 +253,26 @@ export function getWebviewContent(
     <option value="screen">Screen</option>
   </select>
   <select id="view-select" style="display:none"></select>
+  <button id="binds-toggle" title="Show/hide bind values">Binds</button>
 </div>
 <div id="errors" class="error-bar"></div>
-<div class="preview-area">
-  <div id="preview" class="nui-empty">Evaluating NUI code...</div>
+<div class="main-row">
+  <div class="preview-area">
+    <div id="preview" class="nui-empty">Evaluating NUI code...</div>
+  </div>
+  <div id="bind-panel" class="bind-panel" style="display:none">
+    <div class="bind-panel-header">
+      <label>Preset:</label>
+      <select id="preset-select"></select>
+      <button id="delete-preset" title="Delete selected custom preset" disabled>Delete</button>
+      <button id="reset-binds" title="Clear all overrides (back to placeholders)">Reset</button>
+    </div>
+    <div class="bind-panel-header">
+      <input type="text" id="preset-name" placeholder="Save current as…">
+      <button id="save-preset">Save</button>
+    </div>
+    <div id="bind-list"></div>
+  </div>
 </div>
 
 <script>
@@ -240,6 +292,8 @@ function renderNode(n) {
   const s = 'left:' + n.x + 'px;top:' + n.y + 'px;width:' + n.w + 'px;height:' + n.h + 'px;';
   const kids = (n.children || []).map(renderNode).join('');
   const p = n.props || {};
+  // A bound enabled:false dims interactive controls so toggling it is visible.
+  const dis = p.enabled === false ? ' nui-disabled' : '';
 
   switch (n.type) {
     case 'window': {
@@ -267,13 +321,13 @@ function renderNode(n) {
       return '<div class="nui-el nui-spacer-el" style="' + s + '"></div>';
 
     case 'button':
-      return '<div class="nui-el nui-btn" style="' + s + '">' + tv(p.label) + '</div>';
+      return '<div class="nui-el nui-btn' + dis + '" style="' + s + '">' + tv(p.label) + '</div>';
     case 'button_select': {
       const pr = p.value && !p.value.bind ? ' pressed' : '';
-      return '<div class="nui-el nui-btn' + pr + '" style="' + s + '">' + tv(p.label) + '</div>';
+      return '<div class="nui-el nui-btn' + pr + dis + '" style="' + s + '">' + tv(p.label) + '</div>';
     }
     case 'button_image':
-      return '<div class="nui-el nui-btn" style="' + s + '">' + tv(p.label || '[img]') + '</div>';
+      return '<div class="nui-el nui-btn' + dis + '" style="' + s + '">' + tv(p.label || '[img]') + '</div>';
 
     case 'label': {
       const ha = typeof p.text_halign === 'number' ? p.text_halign : (typeof p.halign === 'number' ? p.halign : 0);
@@ -287,8 +341,12 @@ function renderNode(n) {
       return '<div class="nui-el nui-text-el" style="' + s + '">' + tv(p.value) + '</div>';
 
     case 'textedit': {
+      // Show the value (the text content / bind) when present; otherwise fall back
+      // to the placeholder (p.label) rendered faded.
+      const val = tv(p.value);
       const ph = tv(p.label) || '';
-      return '<div class="nui-el nui-textedit-el" style="' + s + '"><span class="placeholder">' + ph + '</span></div>';
+      const inner = (val !== '' && val != null) ? val : '<span class="placeholder">' + ph + '</span>';
+      return '<div class="nui-el nui-textedit-el' + dis + '" style="' + s + '">' + inner + '</div>';
     }
 
     case 'combo': {
@@ -299,14 +357,14 @@ function renderNode(n) {
       } else if (els && els.bind) {
         first = '[' + els.bind + ']';
       }
-      return '<div class="nui-el nui-combo-el" style="' + s + '">' + first + ' &#9662;</div>';
+      return '<div class="nui-el nui-combo-el' + dis + '" style="' + s + '">' + first + ' &#9662;</div>';
     }
 
     case 'check':
-      return '<div class="nui-el nui-check-el" style="' + s + '"><input type="checkbox" disabled> ' + tv(p.label) + '</div>';
+      return '<div class="nui-el nui-check-el' + dis + '" style="' + s + '"><input type="checkbox" disabled> ' + tv(p.label) + '</div>';
 
     case 'slider': case 'sliderf':
-      return '<div class="nui-el nui-slider-el" style="' + s + '"><div class="track"><div class="thumb"></div></div></div>';
+      return '<div class="nui-el nui-slider-el' + dis + '" style="' + s + '"><div class="track"><div class="thumb"></div></div></div>';
 
     case 'progress': {
       const pv = typeof p.value === 'number' ? p.value * 100 : 50;
@@ -358,14 +416,15 @@ let lastNuiJson = null;
 let lastWindowW = 500, lastWindowH = 600;
 let availW = 800, availH = 600;
 
-// Track available space from body size (stable, doesn't depend on content)
+// Track available space from the preview area (excludes the bind panel + toolbar).
+// overflow:auto on .preview-area means its box size is set by layout, not content,
+// so re-rendering inside the observer can't feed back into a resize loop.
+const previewArea = document.querySelector('.preview-area');
 new ResizeObserver(function() {
-  const toolbar = document.querySelector('.toolbar');
-  const errBar = document.getElementById('errors');
-  const tbH = (toolbar ? toolbar.offsetHeight : 0) + (errBar ? errBar.offsetHeight : 0);
-  availW = document.body.clientWidth - 40;
-  availH = document.body.clientHeight - tbH - 40;
-}).observe(document.body);
+  availW = previewArea.clientWidth - 20;
+  availH = previewArea.clientHeight - 20;
+  renderPreview();
+}).observe(previewArea);
 
 function renderPreview() {
   const scale = parseFloat(document.getElementById('scale-select').value) || 1.0;
@@ -476,6 +535,125 @@ document.getElementById('h-input').addEventListener('change', function() {
   populateScaleOptions(computeMaxScale(w, h));
 })();
 
+// ── Bind inspector ────────────────────────────────────────────────────────
+let lastBinds = [];
+let lastBindValues = {};
+let customPresetNames = [];
+
+function escAttr(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+function rgbToHex(c) {
+  if (!c || typeof c !== 'object') return '#b4b9d2';
+  const h = function(n) { return ('0' + (Math.max(0, Math.min(255, n | 0))).toString(16)).slice(-2); };
+  return '#' + h(c.r) + h(c.g) + h(c.b);
+}
+function hexToRgb(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || '');
+  return m ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16), a: 255 } : { r: 180, g: 185, b: 210, a: 255 };
+}
+
+function bindControl(b, v) {
+  switch (b.kind) {
+    case 'bool':
+      return '<input class="bind-input" type="checkbox"' + (v ? ' checked' : '') + '>';
+    case 'number':
+    case 'rows':
+      return '<input class="bind-input" type="number" value="' + escAttr(Number(v) || 0) + '"'
+        + (b.kind === 'rows' ? ' min="0" max="50" step="1"' : '') + '>';
+    case 'color':
+      return '<input class="bind-input" type="color" value="' + rgbToHex(v) + '">';
+    case 'array':
+      return '<input class="bind-input" type="text" value="' + escAttr(Array.isArray(v) ? v.map(function(e){return Array.isArray(e)?e[0]:e;}).join(', ') : '') + '" placeholder="comma, separated, items">';
+    default:
+      return '<input class="bind-input" type="text" value="' + escAttr(v) + '">';
+  }
+}
+
+function readBindControl(kind, inp) {
+  switch (kind) {
+    case 'bool': return inp.checked;
+    case 'number': case 'rows': return Number(inp.value) || 0;
+    case 'color': return hexToRgb(inp.value);
+    case 'array': return inp.value.split(',').map(function(s){return s.trim();}).filter(Boolean);
+    default: return inp.value;
+  }
+}
+
+function renderInspector() {
+  const list = document.getElementById('bind-list');
+  if (!lastBinds.length) { list.innerHTML = '<div class="bind-empty">This form has no binds.</div>'; return; }
+  list.innerHTML = lastBinds.map(function(b) {
+    const v = Object.prototype.hasOwnProperty.call(lastBindValues, b.name) ? lastBindValues[b.name] : undefined;
+    const labelRow = '<div class="bl"><span class="bname">' + escAttr(b.name) + '</span><span class="bkind">' + b.kind + '</span></div>';
+    return '<div class="bind-row bind-' + b.kind + '" data-name="' + escAttr(b.name) + '" data-kind="' + b.kind + '">' + labelRow + bindControl(b, v) + '</div>';
+  }).join('');
+  Array.prototype.forEach.call(list.querySelectorAll('.bind-row'), function(row) {
+    const inp = row.querySelector('.bind-input');
+    if (!inp) return;
+    const evName = (inp.type === 'checkbox' || inp.type === 'color') ? 'change' : 'input';
+    inp.addEventListener(evName, function() {
+      vscode.postMessage({ type: 'setBind', name: row.dataset.name, value: readBindControl(row.dataset.kind, inp) });
+      document.getElementById('preset-select').value = '';
+    });
+  });
+}
+
+function populatePresets(names) {
+  const sel = document.getElementById('preset-select');
+  const prev = sel.value; // preserve the current selection across rebuilds
+  sel.innerHTML = '<option value="">(custom)</option>' + (names || []).map(function(n) { return '<option>' + escAttr(n) + '</option>'; }).join('');
+  // Restore selection if it still exists.
+  if (Array.prototype.some.call(sel.options, function(o) { return o.value === prev; })) sel.value = prev;
+  updateDeleteButton();
+}
+
+function updateDeleteButton() {
+  const sel = document.getElementById('preset-select');
+  const btn = document.getElementById('delete-preset');
+  btn.disabled = customPresetNames.indexOf(sel.value) === -1;
+}
+
+document.getElementById('binds-toggle').addEventListener('click', function() {
+  const panel = document.getElementById('bind-panel');
+  const shown = panel.style.display !== 'none';
+  panel.style.display = shown ? 'none' : 'flex';
+  this.classList.toggle('active', !shown);
+  // availW changed; reflow on next frame once layout settles
+  setTimeout(renderPreview, 0);
+});
+document.getElementById('preset-select').addEventListener('change', function() {
+  updateDeleteButton();
+  if (this.value) vscode.postMessage({ type: 'applyPreset', name: this.value });
+});
+document.getElementById('reset-binds').addEventListener('click', function() {
+  document.getElementById('preset-select').value = '';
+  vscode.postMessage({ type: 'resetBinds' });
+});
+document.getElementById('delete-preset').addEventListener('click', function() {
+  const sel = document.getElementById('preset-select');
+  const name = sel.value;
+  if (name && customPresetNames.indexOf(name) !== -1) {
+    sel.value = '';
+    vscode.postMessage({ type: 'deletePreset', name: name });
+  }
+});
+document.getElementById('save-preset').addEventListener('click', function() {
+  const nameInput = document.getElementById('preset-name');
+  const name = nameInput.value.trim();
+  if (name) {
+    vscode.postMessage({ type: 'savePreset', name: name });
+    nameInput.value = '';
+    // Pre-select so it stays chosen once the refreshed list arrives.
+    document.getElementById('preset-select').value = name;
+  }
+});
+// Re-evaluate with a manually chosen builder function (escape hatch when
+// auto-detection picks the wrong one).
+document.getElementById('fn-select').addEventListener('change', function() {
+  if (this.value) vscode.postMessage({ type: 'selectFunction', name: this.value });
+});
+
 window.addEventListener('message', event => {
   const msg = event.data;
   if (msg.type === 'update') {
@@ -502,7 +680,15 @@ window.addEventListener('message', event => {
     const sel = document.getElementById('fn-select');
     if (msg.functions && msg.functions.length > 0) {
       sel.innerHTML = msg.functions.map(f => '<option>' + f + '</option>').join('');
+      if (msg.selectedFunction) sel.value = msg.selectedFunction;
     }
+
+    // Bind inspector
+    lastBinds = msg.binds || [];
+    lastBindValues = msg.bindValues || {};
+    customPresetNames = msg.customPresets || [];
+    populatePresets(msg.presets);
+    renderInspector();
 
     // Errors
     const errDiv = document.getElementById('errors');
@@ -527,6 +713,17 @@ window.addEventListener('message', event => {
     if (msg.nuiJson) lastNuiJson = msg.nuiJson;  // view switch may update the JSON
     lastLayoutHtml = renderNode(msg.layout);
     renderPreview();
+  }
+
+  // View switch / preset applied / binds reset / preset saved-or-deleted —
+  // refresh the inspector (binds may differ per view) + layout.
+  if (msg.type === 'bindState') {
+    if (msg.binds) lastBinds = msg.binds;
+    if (msg.bindValues) lastBindValues = msg.bindValues;
+    if (msg.customPresets) customPresetNames = msg.customPresets;
+    if (msg.presets) populatePresets(msg.presets);
+    renderInspector();
+    if (msg.layout) { lastLayoutHtml = renderNode(msg.layout); renderPreview(); }
   }
 });
 </script>
