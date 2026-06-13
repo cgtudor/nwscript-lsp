@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.1
+
+### Fixes
+
+- **NUI Preview** -- The preview now takes account of a few more pecularities with the way the engine resolves layout constraints, providing a more accurate portrayal of element widths.
+- **NUI Preview** -- Fixed a "Maximum loop iterations exceeded" error (and the resulting garbled preview) caused by `GetFirst*`/`GetNext*` iterator loops, such as `GetFirstPC`/`GetNextPC`, never terminating. Object enumeration loops now run correctly, so previews for windows that list players or other objects render properly.
+
 ## 1.6.0
 
 ### Fixes

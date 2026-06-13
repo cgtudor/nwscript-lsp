@@ -726,7 +726,7 @@ export function evaluateNuiScript(source: string, functionName?: string): EvalRe
   try {
     tokens = lex(source);
   } catch (e: any) {
-    return { json: null, errors: [`Lexer error: ${e.message}`], functions: [], geometry: null };
+    return { json: null, errors: [`Lexer error: ${e.message}`], functions: [], geometry: null, views: [], swapGroupId: null, interpreter: null };
   }
 
   // Parse
@@ -734,7 +734,7 @@ export function evaluateNuiScript(source: string, functionName?: string): EvalRe
   try {
     program = parse(tokens);
   } catch (e: any) {
-    return { json: null, errors: [`Parse error: ${e.message}`], functions: [], geometry: null };
+    return { json: null, errors: [`Parse error: ${e.message}`], functions: [], geometry: null, views: [], swapGroupId: null, interpreter: null };
   }
 
   // Interpret

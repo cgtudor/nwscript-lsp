@@ -842,12 +842,21 @@ export const engineMocks: Record<string, (...args: any[]) => any> = {
   GetObjectByTag: (_sTag?: string, _nNth?: number) => 0x7f000000,
   GetPCSpeaker: () => 0x7f000000,
   GetFirstPC: () => 0x7f000000,
-  GetNextPC: () => 0x7f000001,
+  // Iterator exhausts after the first PC. Returning a valid handle here would make
+  // the standard `while (GetIsObjectValid(o)) { ...; o = GetNextPC(); }` loop spin
+  // forever (hitting MAX_ITERATIONS) since GetIsObjectValid can never go false.
+  GetNextPC: () => 0,
   GetModule: () => 0x7f000000,
   GetArea: (_obj?: any) => 0x7f000000,
 
-  // Object validity and type
-  GetIsObjectValid: (_obj?: any) => 1,
+  // Object validity and type. Must reflect the argument: returning 1 unconditionally
+  // makes every GetFirst*/GetNext* iterator loop infinite. Invalid = 0 (also the
+  // unknown-function fallback) or the {__object, id:0} value passed for object params.
+  GetIsObjectValid: (obj?: any) => {
+    if (obj === undefined || obj === null || obj === 0) return 0;
+    if (typeof obj === 'object' && (obj as any).__object && (obj as any).id === 0) return 0;
+    return 1;
+  },
   GetObjectType: (_obj?: any) => 5, // OBJECT_TYPE_CREATURE
   GetIsDM: (_obj?: any) => 1,
   GetIsDMPossessed: (_obj?: any) => 0,

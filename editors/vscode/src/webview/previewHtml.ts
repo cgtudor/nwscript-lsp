@@ -78,9 +78,9 @@ export function getWebviewContent(
   }
   .nui-window-body {
     position: absolute; top: 28px; left: 0; right: 0; bottom: 0;
-    overflow-y: auto; overflow-x: hidden;
+    overflow-y: auto; overflow-x: auto;
   }
-  .nui-window-body::-webkit-scrollbar { width: 10px; }
+  .nui-window-body::-webkit-scrollbar { width: 10px; height: 10px; }
   .nui-window-body::-webkit-scrollbar-track { background: #1a1a2e; }
   .nui-window-body::-webkit-scrollbar-thumb { background: #555577; border-radius: 4px; }
   .nui-window-body::-webkit-scrollbar-thumb:hover { background: #6666aa; }
@@ -195,9 +195,9 @@ export function getWebviewContent(
   <label>Function:</label>
   <select id="fn-select"><option value="">(evaluating...)</option></select>
   <label>Size:</label>
-  <input type="number" id="w-input" value="500" min="100" readonly>
+  <input type="number" id="w-input" value="500" min="100" step="10" title="Window width (logical units) — simulates resizing the window in-game">
   <span>&times;</span>
-  <input type="number" id="h-input" value="600" min="100" readonly>
+  <input type="number" id="h-input" value="600" min="100" step="10" title="Window height (logical units) — simulates resizing the window in-game">
   <label>Screen:</label>
   <select id="res-select">
     <option value="1280x720">1280x720</option>
@@ -246,11 +246,12 @@ function renderNode(n) {
       const title = tv(p.title) || 'NUI Window';
       const cls = p.closable !== false ? '<div class="nui-close">X</div>' : '';
       const ch = p.contentHeight || n.h;
+      const cw = p.contentWidth || 0;
       const tbH = p.titleBarH || 28;
       const sc = p.scale || 1;
       return '<div class="nui-window-frame" style="width:' + n.w + 'px;height:' + n.h + 'px;font-size:' + (13 * sc) + 'px">'
         + '<div class="nui-titlebar" style="height:' + tbH + 'px;font-size:' + (13 * sc) + 'px"><span>' + title + '</span>' + cls + '</div>'
-        + '<div class="nui-window-body" style="top:' + tbH + 'px"><div style="position:relative;min-height:' + ch + 'px">' + kids + '</div></div>'
+        + '<div class="nui-window-body" style="top:' + tbH + 'px"><div style="position:relative;min-height:' + ch + 'px;min-width:' + cw + 'px">' + kids + '</div></div>'
         + '</div>';
     }
     case 'row':
@@ -421,32 +422,51 @@ document.getElementById('fit-select').addEventListener('change', function() {
   renderPreview();
 });
 
+function readSizeInputs() {
+  const w = parseInt(document.getElementById('w-input').value, 10);
+  const h = parseInt(document.getElementById('h-input').value, 10);
+  if (w >= 100) lastWindowW = w;
+  if (h >= 100) lastWindowH = h;
+}
+
+function requestResolve() {
+  if (!lastNuiJson) { renderPreview(); return; }
+  const scale = parseFloat(document.getElementById('scale-select').value) || 1.0;
+  vscode.postMessage({
+    type: 'resolve',
+    nuiJson: lastNuiJson,
+    windowWidth: lastWindowW,
+    windowHeight: lastWindowH,
+    scale: scale,
+  });
+}
+
 document.getElementById('view-select').addEventListener('change', function() {
   const viewName = this.value;
   if (viewName) {
     const scale = parseFloat(document.getElementById('scale-select').value) || 1.0;
+    readSizeInputs();
     vscode.postMessage({
       type: 'switchView',
       viewName: viewName,
       scale: scale,
+      windowWidth: lastWindowW,
+      windowHeight: lastWindowH,
     });
   }
 });
 
 document.getElementById('scale-select').addEventListener('change', function() {
-  const scale = parseFloat(this.value) || 1.0;
-  if (lastNuiJson && scale !== 1.0) {
-    // Request re-solve from extension with the new scale
-    vscode.postMessage({
-      type: 'resolve',
-      nuiJson: lastNuiJson,
-      windowWidth: lastWindowW,
-      windowHeight: lastWindowH,
-      scale: scale,
-    });
-  } else {
-    renderPreview();
-  }
+  requestResolve();
+});
+
+document.getElementById('w-input').addEventListener('change', function() {
+  readSizeInputs();
+  requestResolve();
+});
+document.getElementById('h-input').addEventListener('change', function() {
+  readSizeInputs();
+  requestResolve();
 });
 
 // Initialize scale options for default resolution

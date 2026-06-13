@@ -77,8 +77,11 @@ export class NuiPreviewPanel {
 
               const scale = msg.scale ?? 1.0;
               const geo = this.lastResult.geometry;
-              const winW = geo && geo.w > 50 ? Math.round(geo.w) : 500;
-              const winH = geo && geo.h > 50 ? Math.round(geo.h) : 600;
+              // Prefer the webview's size override (editable W/H inputs), then captured geometry
+              const winW = msg.windowWidth > 50 ? Math.round(msg.windowWidth)
+                : geo && geo.w > 50 ? Math.round(geo.w) : 500;
+              const winH = msg.windowHeight > 50 ? Math.round(msg.windowHeight)
+                : geo && geo.h > 50 ? Math.round(geo.h) : 600;
               const layout = solveLayout(jsonClone, winW, winH, scale);
               this.panel.webview.postMessage({
                 type: "scaleResult",

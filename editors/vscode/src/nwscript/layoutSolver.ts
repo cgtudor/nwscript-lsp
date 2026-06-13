@@ -13,6 +13,19 @@
  *   - LayoutGroup starts at (0,0); gw/gh are edit variables (MEDIUM) set to
  *     the Nuklear content pane dimensions (after title bar + window padding).
  *
+ * Key engine behaviors replicated here (calibrated against in-game screenshots of
+ * dm_menu_nui at UI scales 1.0 and 2.2):
+ *   - Button-family widgets (button, button_select, button_image, combo) without an
+ *     explicit NuiWidth get a STRONG default width of ~150 logical units. They never
+ *     stretch to fill and never shrink — rows of them overflow + scrollbar instead.
+ *   - Textedit/label/spacer/etc. are genuinely flexible and absorb leftover space.
+ *   - Group (NuiGroup) content does NOT fill the group's pane: it solves at its
+ *     natural width (the widest rigid row inside). Flexible elements stretch only to
+ *     equalize rows up to that width; rigid-only rows narrower than it stay natural,
+ *     left-aligned. Pane size is irrelevant to group content width.
+ *   - The window root fills the window pane, but rigid content wider than the pane
+ *     overflows it (horizontal scrollbar on the window body).
+ *
  * This solver approximates the layout without a full constraint solver:
  *   - GAP approximates visual spacing from Nuklear's widget rendering padding.
  *   - BODY_PADDING approximates Nuklear's window content pane insets.
@@ -22,6 +35,58 @@ const GAP = 8;           // unscaled default margin spacing (margins don't scale
 const TITLE_BAR_H = 28;
 const BODY_PAD_X = 10;   // unscaled Nuklear window content pane horizontal padding per side
 const BODY_PAD_Y = 16;   // unscaled Nuklear window content pane vertical padding per side
+
+// Engine default width for button-family widgets without an explicit NuiWidth.
+// These sizes are STRONG constraints in the engine's solver: the widgets neither
+// stretch to fill nor shrink below this — a row of them overflows a too-narrow
+// container (scrollbar) instead of compressing.
+// Calibrated against in-game screenshots: ~149px at UI scale 1.0, ~330px at 2.2,
+// so the default is in logical units and scales with UI scale.
+// Verified for button/button_select/combo; button_image assumed (same widget family).
+const DEFAULT_RIGID_W = 150;
+const RIGID_DEFAULT_TYPES = new Set(["button", "button_image", "button_select", "combo"]);
+
+/**
+ * The width the engine forces on an element via STRONG constraints, in physical px:
+ * an explicit NuiWidth, or the type default for button-family widgets.
+ * Returns null for genuinely flexible elements (textedit, label, spacer, list, ...).
+ */
+function rigidWidth(el: any, scale: number): number | null {
+  const w = num(el?.width);
+  if (w != null) return w * scale;
+  if (RIGID_DEFAULT_TYPES.has(el?.type ?? "")) return DEFAULT_RIGID_W * scale;
+  return null;
+}
+
+/**
+ * Natural (rigid) content width of an element in physical px — the width its strong
+ * constraints demand, with flexible elements contributing nothing.
+ * This is what anchors a group's content width in the engine: group content solves
+ * to the widest rigid row, NOT to the group's pane. Flexible elements stretch only
+ * up to that width; rigid-only rows narrower than it stay natural (left-aligned).
+ */
+function naturalWidth(el: any, scale: number, gap: number): number {
+  if (!el || typeof el !== "object") return 0;
+  const margin2 = 2 * (num(el.margin) ?? 0);
+  const w = num(el.width);
+  if (w != null) return w * scale + margin2;
+  if (RIGID_DEFAULT_TYPES.has(el.type ?? "")) return DEFAULT_RIGID_W * scale + margin2;
+  if (el.type === "row") {
+    const kids = (el.children ?? []).filter((k: any) => k);
+    let sum = 0;
+    for (const k of kids) sum += naturalWidth(k, scale, gap);
+    return sum + gap * Math.max(0, kids.length - 1) + margin2;
+  }
+  if (el.type === "col") {
+    let max = 0;
+    for (const k of el.children ?? []) {
+      if (k) max = Math.max(max, naturalWidth(k, scale, gap));
+    }
+    return max + margin2;
+  }
+  // Flexible leaves and groups (a group fills its parent and scrolls its own content)
+  return margin2;
+}
 
 export interface SolvedNode {
   type: string;
@@ -55,22 +120,28 @@ export function solveLayout(json: any, windowW: number, windowH: number, scale: 
   const bodyW = physW - 2 * padX;
   const bodyH = physH - titleH - 2 * padY;
 
-  const rootChildren = solveElementScaled(json.root, bodyW, bodyH, scale, gap);
+  // The window root fills the pane, but rigid content (e.g. a row of default-width
+  // buttons) can exceed it — the engine then shows a horizontal scrollbar on the
+  // window body instead of shrinking the widgets.
+  const rootAvailW = Math.max(bodyW, json.root ? naturalWidth(json.root, scale, gap) : 0);
+  const rootChildren = solveElementScaled(json.root, rootAvailW, bodyH, scale, gap);
 
   // Expand root to fit actual content so overflow:hidden on .nui-el doesn't clip.
   let contentH = bodyH;
+  let contentW = bodyW;
   if (rootChildren) {
     const childBottom = maxChildBottom(rootChildren);
     if (childBottom > rootChildren.h) {
       rootChildren.h = childBottom;
     }
     contentH = padY + rootChildren.h + padY;
+    contentW = padX + rootChildren.w + padX;
   }
 
   return {
     type: "window",
     x: 0, y: 0, w: physW, h: physH,
-    props: { title: json.title, closable: json.closable, contentHeight: contentH, titleBarH: titleH, scale },
+    props: { title: json.title, closable: json.closable, contentHeight: contentH, contentWidth: contentW, titleBarH: titleH, scale },
     children: rootChildren ? [{
       ...rootChildren,
       x: padX, y: padY,
@@ -99,10 +170,12 @@ function solveElementScaled(el: any, availW: number, availH: number, scale: numb
   const innerW = Math.max(0, availW - 2 * margin);
   const innerH = Math.max(0, availH - 2 * margin);
 
-  // Element dimensions: explicit sizes scale with UI, flexible fills available
+  // Element dimensions: explicit sizes and type defaults are STRONG (scale with UI,
+  // never clamped — the engine lets them overflow and scrolls). Flexible fills available.
   const rawW = num(el.width);
   const rawH = num(el.height);
-  let ew = rawW != null ? rawW * scale : innerW;
+  const rigidW = rigidWidth(el, scale);
+  let ew = rigidW != null ? rigidW : innerW;
   let eh = rawH != null ? rawH * scale : innerH;
 
   // Aspect ratio
@@ -111,10 +184,6 @@ function solveElementScaled(el: any, availW: number, availH: number, scale: numb
     if (rawW != null && rawH == null) eh = ew / aspect;
     else if (rawH != null && rawW == null) ew = eh * aspect;
   }
-
-  // Clamp to available
-  ew = Math.min(ew, innerW);
-  eh = Math.min(eh, innerH);
 
   // Content area for children (after padding)
   const cw = Math.max(0, ew - 2 * padding);
@@ -145,6 +214,16 @@ function solveElementScaled(el: any, availW: number, availH: number, scale: numb
       break;
   }
 
+  // Spans never clip their children in the engine (strong widget sizes win over the
+  // span's medium containment and overflow). Grow layout containers to hold them so
+  // the renderer's overflow:hidden doesn't clip; groups keep their size and scroll.
+  if ((type === "row" || type === "col") && node.children.length > 0) {
+    for (const c of node.children) {
+      node.w = Math.max(node.w, c.x + c.w + padding);
+      node.h = Math.max(node.h, c.y + c.h + padding);
+    }
+  }
+
   return node;
 }
 
@@ -154,15 +233,16 @@ function solveRow(children: any[], startX: number, startY: number, totalW: numbe
   const gaps = gap * Math.max(0, children.length - 1);
   const distribW = totalW - gaps;
 
-  // Measure fixed children (widths scale, margins don't)
+  // Measure rigid children: explicit widths and button-family defaults are both
+  // strong in the engine (widths scale, margins don't)
   let fixedSum = 0;
   let flexCount = 0;
   for (const child of children) {
     if (!child) continue;
-    const cw = num(child.width);
+    const rw = rigidWidth(child, scale);
     const cm = num(child.margin) ?? 0;
-    if (cw != null) {
-      fixedSum += cw * scale + 2 * cm;
+    if (rw != null) {
+      fixedSum += rw + 2 * cm;
     } else {
       flexCount++;
     }
@@ -175,8 +255,8 @@ function solveRow(children: any[], startX: number, startY: number, totalW: numbe
   for (const child of children) {
     if (!child) continue;
     const cm = num(child.margin) ?? 0;
-    const explicitW = num(child.width);
-    const slotW = explicitW != null ? explicitW * scale + 2 * cm : flexW;
+    const rw = rigidWidth(child, scale);
+    const slotW = rw != null ? rw + 2 * cm : flexW;
 
     const solved = solveElementScaled(child, slotW, totalH, scale, gap);
     if (solved) {
@@ -250,10 +330,18 @@ function solveGroup(el: any, startX: number, startY: number, cw: number, ch: num
   const children = el.children ?? [];
   if (!Array.isArray(children) || children.length === 0) return [];
 
-  // Group typically contains one child (a col)
+  // Group typically contains one child (a col).
+  // Engine: group content does NOT fill the group's pane. Its width is anchored by
+  // the widest rigid row inside (explicit NuiWidth + button-family defaults);
+  // flexible elements stretch only up to that width. Content narrower than the pane
+  // stays left-aligned; wider content overflows and the group scrolls.
+  // Verified in-game: the same content solves to identical pixel widths in a
+  // 1677px-wide window and a ~1100px one.
   const results: SolvedNode[] = [];
   for (const child of children) {
-    const solved = solveElementScaled(child, cw, ch, scale, gap);
+    const natW = naturalWidth(child, scale, gap);
+    const contentW = natW > 0 ? natW : cw; // no rigid content at all → fall back to pane
+    const solved = solveElementScaled(child, contentW, ch, scale, gap);
     if (solved) {
       solved.x += startX;
       solved.y += startY;
