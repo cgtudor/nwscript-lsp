@@ -9,7 +9,7 @@
   - **Automatic placeholders** -- every bind is filled with a sensible sample value inferred from where it is used (labels/text get readable strings, `row_count` fills a few list rows, checkboxes/visibility get booleans, sliders get numbers, color binds get a color, combo/option lists get sample entries).
   - **Bind inspector** -- a new **Binds** toggle opens a side panel listing every bind in the form with a type-appropriate editor (text, number, checkbox, color, list). Edits update the preview live, including list row counts.
   - **Presets** -- switch between built-in datasets (**Typical**, **Empty**, **Overflow** for testing text wrapping, **Max rows** for testing list growth), or save your own named preset per form.
-
+- **Struct fields auto-complete** -- Struct objects now have auto-complete intellisense for the available fields.
 
 ### Fixes
 

@@ -629,11 +629,18 @@ impl LanguageServer for NwscriptLanguageServer {
         let guard = self.index.read().unwrap();
         let items = match guard.as_ref() {
             Some(index) => {
-                let mut items = providers::completion::completions_from_index(
-                    index, uri, &doc.parsed, &doc.line_index, cursor_offset,
-                );
-                items.extend(providers::completion::keyword_completions());
-                items
+                // Member access (`someStruct.`) yields only that struct's fields.
+                if let Some(fields) = providers::completion::struct_field_completions(
+                    index, uri, &doc.parsed, &doc.source, cursor_offset,
+                ) {
+                    fields
+                } else {
+                    let mut items = providers::completion::completions_from_index(
+                        index, uri, &doc.parsed, &doc.line_index, cursor_offset,
+                    );
+                    items.extend(providers::completion::keyword_completions());
+                    items
+                }
             }
             None => providers::completion::keyword_completions(),
         };

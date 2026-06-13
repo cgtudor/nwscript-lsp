@@ -66,6 +66,123 @@ pub fn completions_from_index(
     items
 }
 
+/// Produce struct field completions when the cursor is in a member-access
+/// context (`someVar.` or a chain like `a.b.c.`).
+///
+/// Returns `None` if the cursor is not after a `.` whose left-hand side
+/// resolves to a struct type — in that case the caller should fall back to the
+/// normal completion list.
+pub fn struct_field_completions(
+    index: &WorkspaceIndex,
+    uri: &Url,
+    parsed: &ParsedFile,
+    source: &str,
+    cursor_offset: u32,
+) -> Option<Vec<CompletionItem>> {
+    let chain = parse_member_access(source, cursor_offset)?;
+    let (base, fields) = chain.split_first()?;
+
+    // Resolve the struct type of the base identifier (local/param, then global).
+    let base_type = find_local_type(parsed, cursor_offset, base)
+        .or_else(|| index.global_var_type(uri, base))?;
+    let mut struct_name = match base_type {
+        TypeKind::Struct(name) => name,
+        _ => return None,
+    };
+
+    // Walk intermediate field accesses; each must itself be a struct.
+    for field in fields {
+        let struct_fields = index.struct_fields(uri, &struct_name)?;
+        let (_, ty) = struct_fields.into_iter().find(|(n, _)| n == field)?;
+        struct_name = match ty {
+            TypeKind::Struct(name) => name,
+            _ => return None,
+        };
+    }
+
+    let target_fields = index.struct_fields(uri, &struct_name)?;
+    let items = target_fields
+        .into_iter()
+        .map(|(fname, ty)| {
+            let ty_display = crate::providers::symbols::format_type(&ty);
+            CompletionItem {
+                label: fname.clone(),
+                kind: Some(CompletionItemKind::FIELD),
+                detail: Some(format!("(field) {ty_display} {fname}")),
+                sort_text: Some(format!("0_{fname}")),
+                ..Default::default()
+            }
+        })
+        .collect();
+    Some(items)
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+fn skip_ws_back(bytes: &[u8], i: &mut usize) {
+    while *i > 0 && bytes[*i - 1].is_ascii_whitespace() {
+        *i -= 1;
+    }
+}
+
+/// Scan backwards from the cursor to detect a member-access chain.
+///
+/// For `a.b.c.fo<cursor>` (or `a.b.c.<cursor>`) returns `["a", "b", "c"]`.
+/// Returns `None` when the cursor is not immediately after a `.` that follows a
+/// plain identifier chain (e.g. after a function call `).` or a numeric literal).
+fn parse_member_access(source: &str, cursor_offset: u32) -> Option<Vec<String>> {
+    let bytes = source.as_bytes();
+    let mut i = (cursor_offset as usize).min(bytes.len());
+
+    // Skip the partial field name being typed after the dot.
+    while i > 0 && is_ident_byte(bytes[i - 1]) {
+        i -= 1;
+    }
+    skip_ws_back(bytes, &mut i);
+
+    // Must be immediately after a `.`.
+    if i == 0 || bytes[i - 1] != b'.' {
+        return None;
+    }
+    i -= 1;
+
+    let mut chain: Vec<String> = Vec::new();
+    loop {
+        skip_ws_back(bytes, &mut i);
+        let end = i;
+        while i > 0 && is_ident_byte(bytes[i - 1]) {
+            i -= 1;
+        }
+        if i == end {
+            return None; // not a plain identifier (call, index, etc.)
+        }
+        if bytes[i].is_ascii_digit() {
+            return None; // numeric literal like `1.5`, not a member access
+        }
+        chain.push(source[i..end].to_string());
+
+        skip_ws_back(bytes, &mut i);
+        if i > 0 && bytes[i - 1] == b'.' {
+            i -= 1;
+            continue;
+        }
+        break;
+    }
+    chain.reverse();
+    Some(chain)
+}
+
+/// Find the declared type of a local variable or parameter by name at the
+/// given cursor offset.
+fn find_local_type(parsed: &ParsedFile, cursor_offset: u32, name: &str) -> Option<TypeKind> {
+    collect_locals(parsed, cursor_offset)
+        .into_iter()
+        .find(|l| l.name == name)
+        .map(|l| l.ty)
+}
+
 fn symbol_to_completion(sym: &SymbolInfo, auto_import: Option<TextEdit>) -> CompletionItem {
     // Sort priority: 1_ for visible symbols, 2_ for auto-import.
     // (Locals use 0_ — see completions_from_index.)
@@ -164,6 +281,7 @@ pub fn find_local_detail(parsed: &ParsedFile, cursor_offset: u32, name: &str) ->
 struct LocalVar {
     name: String,
     detail: String,
+    ty: TypeKind,
 }
 
 fn type_display(ty: &TypeRef) -> String {
@@ -217,6 +335,7 @@ fn collect_locals(parsed: &ParsedFile, cursor_offset: u32) -> Vec<LocalVar> {
             locals.push(LocalVar {
                 name: name.name.clone(),
                 detail: format!("(parameter) {} {}", type_display(&param.ty), name.name),
+                ty: param.ty.kind.clone(),
             });
         }
     }
@@ -250,6 +369,7 @@ fn collect_vars_from_stmt(stmt: &Stmt, cursor_offset: u32, out: &mut Vec<LocalVa
                     out.push(LocalVar {
                         name: name.name.clone(),
                         detail: format!("{}{} {}", prefix, type_display(&v.ty), name.name),
+                        ty: v.ty.kind.clone(),
                     });
                 }
             }
@@ -312,4 +432,94 @@ pub fn keyword_completions() -> Vec<CompletionItem> {
             ..Default::default()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::index::WorkspaceIndex;
+
+    /// Build a single-file index and compute field completions at the cursor
+    /// marked by `|` in `source`.
+    fn fields_at(source: &str) -> Option<Vec<String>> {
+        let cursor_offset = source.find('|').expect("test source needs a `|` cursor marker") as u32;
+        let clean = source.replacen('|', "", 1);
+
+        let index = WorkspaceIndex::new(vec![], vec![], vec![]);
+        let uri = Url::parse("file:///test.nss").unwrap();
+        index.update_file(&uri, clean.clone());
+
+        let parsed = nwscript_parser::parse(&clean);
+        struct_field_completions(&index, &uri, &parsed, &clean, cursor_offset)
+            .map(|items| items.into_iter().map(|i| i.label).collect())
+    }
+
+    #[test]
+    fn local_struct_field_completion() {
+        let fields = fields_at(
+            "struct Vec3 { float x; float y; float z; }\n\
+             void main() { struct Vec3 v; v.| }",
+        )
+        .expect("expected field completions");
+        assert_eq!(fields, vec!["x", "y", "z"]);
+    }
+
+    #[test]
+    fn partial_field_name_still_resolves() {
+        let fields = fields_at(
+            "struct Vec3 { float x; float y; float z; }\n\
+             void main() { struct Vec3 v; v.y| }",
+        )
+        .expect("expected field completions");
+        assert_eq!(fields, vec!["x", "y", "z"]);
+    }
+
+    #[test]
+    fn parameter_struct_field_completion() {
+        let fields = fields_at(
+            "struct Point { int a; int b; }\n\
+             void main(struct Point p) { p.| }",
+        )
+        .expect("expected field completions");
+        assert_eq!(fields, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn nested_struct_chain() {
+        let fields = fields_at(
+            "struct Inner { int deep; }\n\
+             struct Outer { struct Inner inner; int top; }\n\
+             void main() { struct Outer o; o.inner.| }",
+        )
+        .expect("expected field completions");
+        assert_eq!(fields, vec!["deep"]);
+    }
+
+    #[test]
+    fn global_struct_field_completion() {
+        let fields = fields_at(
+            "struct Vec3 { float x; float y; float z; }\n\
+             struct Vec3 g;\n\
+             void main() { g.| }",
+        )
+        .expect("expected field completions");
+        assert_eq!(fields, vec!["x", "y", "z"]);
+    }
+
+    #[test]
+    fn non_member_access_returns_none() {
+        // Bare identifier (no `.`) should not trigger field completion.
+        assert!(fields_at("void main() { int x; x| }").is_none());
+    }
+
+    #[test]
+    fn non_struct_type_returns_none() {
+        // `int` has no fields.
+        assert!(fields_at("void main() { int n; n.| }").is_none());
+    }
+
+    #[test]
+    fn unknown_variable_returns_none() {
+        assert!(fields_at("void main() { unknownVar.| }").is_none());
+    }
 }

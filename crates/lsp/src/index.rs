@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dashmap::DashMap;
+use nwscript_parser::ast::TypeKind;
 use nwscript_parser::{Declaration, LineIndex, ParsedFile};
 use tower_lsp::lsp_types::Url;
 
@@ -384,6 +385,76 @@ impl WorkspaceIndex {
     /// Get all files in the index.
     pub fn all_files(&self) -> Vec<Url> {
         self.files.iter().map(|r| r.key().clone()).collect()
+    }
+
+    /// Collect file URIs visible from `uri` (self + transitive includes + implicit nwscript.nss).
+    pub fn visible_files(&self, uri: &Url) -> Vec<Url> {
+        let uri = normalize_uri(uri);
+        let mut visited = HashSet::new();
+        let mut out = Vec::new();
+        self.collect_visible_files(&uri, &mut visited, &mut out);
+        if let Some(nwscript_uri) = self.resolve_include("nwscript") {
+            self.collect_visible_files(&nwscript_uri, &mut visited, &mut out);
+        }
+        out
+    }
+
+    fn collect_visible_files(&self, uri: &Url, visited: &mut HashSet<Url>, out: &mut Vec<Url>) {
+        if !visited.insert(uri.clone()) {
+            return;
+        }
+        let Some(file) = self.get_file(uri) else {
+            return;
+        };
+        out.push(uri.clone());
+        for inc in &file.includes {
+            if let Some(inc_uri) = self.resolve_include(inc) {
+                self.collect_visible_files(&inc_uri, visited, out);
+            }
+        }
+    }
+
+    /// Find a struct's fields (name + type) by struct name, searching files
+    /// visible from `uri`. Returns `None` if the struct is not found.
+    pub fn struct_fields(&self, uri: &Url, struct_name: &str) -> Option<Vec<(String, TypeKind)>> {
+        for furi in self.visible_files(uri) {
+            let Some(file) = self.get_file(&furi) else {
+                continue;
+            };
+            for decl in &file.parsed.declarations {
+                if let Declaration::Struct(s) = decl {
+                    if s.name.as_ref().is_some_and(|n| n.name == struct_name) {
+                        return Some(
+                            s.fields
+                                .iter()
+                                .filter_map(|f| {
+                                    f.name.as_ref().map(|n| (n.name.clone(), f.ty.kind.clone()))
+                                })
+                                .collect(),
+                        );
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Find the declared type of a global variable by name, searching files
+    /// visible from `uri`.
+    pub fn global_var_type(&self, uri: &Url, name: &str) -> Option<TypeKind> {
+        for furi in self.visible_files(uri) {
+            let Some(file) = self.get_file(&furi) else {
+                continue;
+            };
+            for decl in &file.parsed.declarations {
+                if let Declaration::GlobalVar(v) = decl {
+                    if v.name.as_ref().is_some_and(|n| n.name == name) {
+                        return Some(v.ty.kind.clone());
+                    }
+                }
+            }
+        }
+        None
     }
 }
 
