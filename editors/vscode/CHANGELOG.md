@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.0
+
+### Improvements
+- **Formatter: string concatenation wrapping** -- Long binary expressions (such as string literals joined with `+`) are now wrapped one operand per line with the operator trailing each line, instead of being forced onto a single over-long line. The chain stays on one line if it fits within `maxLineWidth`, and a single string literal is never split (it cannot be without changing its value). Applies to call arguments, variable initializers, and other expression contexts.
+
+### Fixes
+- **Unused imports: transitive dependencies** -- The unused imports now properly checks transitive imports. The caveat: an import won't be marked as unused if it has functions that are already covered by other imports (meaning redundant imports are not marked). This is to avoid incorrectly marking imports as unused and breaking compilation.
+
 ## 1.7.0
 
 ### New Features

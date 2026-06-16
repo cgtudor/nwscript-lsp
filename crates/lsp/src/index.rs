@@ -336,6 +336,48 @@ impl WorkspaceIndex {
         }
     }
 
+    /// Collect the names of symbols in the transitive include tree rooted at
+    /// `uri` that also appear in `used`.
+    ///
+    /// Because NWScript `#include` is textual, an include provides a symbol if
+    /// that symbol is defined in the include's own file *or* in any file it
+    /// transitively includes. This is what determines whether an `#include` is
+    /// actually needed — checking only the include's own symbols misses the
+    /// common case where a header is included solely to pull in symbols from the
+    /// files *it* includes. Restricting to `used` keeps the returned set small.
+    pub fn transitive_used_symbols(&self, uri: &Url, used: &HashSet<&str>) -> HashSet<String> {
+        let uri = normalize_uri(uri);
+        let mut visited = HashSet::new();
+        let mut out = HashSet::new();
+        self.collect_used_symbols_recursive(&uri, used, &mut visited, &mut out);
+        out
+    }
+
+    fn collect_used_symbols_recursive(
+        &self,
+        uri: &Url,
+        used: &HashSet<&str>,
+        visited: &mut HashSet<Url>,
+        out: &mut HashSet<String>,
+    ) {
+        if !visited.insert(uri.clone()) {
+            return; // Cycle detection
+        }
+        let Some(file) = self.get_file(uri) else {
+            return;
+        };
+        for sym in &file.symbols {
+            if used.contains(sym.name.as_str()) {
+                out.insert(sym.name.clone());
+            }
+        }
+        for inc in &file.includes {
+            if let Some(inc_uri) = self.resolve_include(inc) {
+                self.collect_used_symbols_recursive(&inc_uri, used, visited, out);
+            }
+        }
+    }
+
     /// Call a closure for each symbol across all indexed files, without cloning.
     pub fn for_each_symbol<F>(&self, mut f: F)
     where

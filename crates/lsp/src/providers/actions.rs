@@ -36,18 +36,21 @@ pub fn analyze_imports(
             continue;
         };
 
-        // Get symbols from this include
         let Some(inc_uri) = index.resolve_include(inc_name) else {
             continue;
         };
-        let Some(inc_file) = index.get_file(&inc_uri) else {
+        if index.get_file(&inc_uri).is_none() {
             continue;
-        };
+        }
 
-        // Check if ANY symbol from the included file is referenced in our source
-        let is_used = inc_file.symbols.iter().any(|sym| {
-            used_idents.contains(sym.name.as_str())
-        });
+        // Check whether any symbol reachable through this include's *transitive*
+        // include tree is referenced. NWScript #include is textual, so an include
+        // re-exports everything it (recursively) includes — a header is commonly
+        // included purely to pull in symbols from the files it includes. Checking
+        // only the include's own symbols falsely flags such headers as unused,
+        // and removing them breaks compilation.
+        let provided = index.transitive_used_symbols(&inc_uri, &used_idents);
+        let is_used = !provided.is_empty();
 
         if !is_used {
             let line_range = include_line_range(inc.span, line_index, source);
@@ -646,4 +649,85 @@ fn include_line_range(span: Span, line_index: &LineIndex, source: &str) -> Range
         Position::new(start_line, 0),
         Position::new(end_line, end_col),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::index::WorkspaceIndex;
+    use std::path::PathBuf;
+
+    /// Build a multi-file index from (filename, source) pairs, then run
+    /// `analyze_imports` on the named target file. Returns the include names
+    /// reported as unused.
+    fn unused_imports(files: &[(&str, &str)], target: &str) -> Vec<String> {
+        let index = WorkspaceIndex::new(vec![], vec![], vec![]);
+        for (name, src) in files {
+            let uri = Url::parse(&format!("file:///{name}")).unwrap();
+            index.index_file_with_source(uri, PathBuf::from(name), src.to_string());
+        }
+
+        let target_uri = Url::parse(&format!("file:///{target}")).unwrap();
+        let source = files
+            .iter()
+            .find(|(n, _)| *n == target)
+            .map(|(_, s)| s.to_string())
+            .unwrap();
+        let parsed = nwscript_parser::parse(&source);
+        let line_index = LineIndex::new(&source);
+
+        let analysis = analyze_imports(&index, &target_uri, &parsed, &source, &line_index);
+        analysis
+            .diagnostics
+            .iter()
+            .map(|d| {
+                d.message
+                    .trim_start_matches("Unused import \"")
+                    .trim_end_matches('"')
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn transitively_used_include_not_flagged() {
+        // main uses getMaxSkillRank, which is defined in _class_inc. main only
+        // includes guard_inc, which in turn includes _class_inc. guard_inc must
+        // NOT be flagged unused — removing it would lose getMaxSkillRank.
+        let files = [
+            ("_class_inc.nss", "int getMaxSkillRank(object oPC) { return 10; }"),
+            (
+                "guard_inc.nss",
+                "#include \"_class_inc\"\nint getIsGuard(object oNPC) { return 0; }",
+            ),
+            (
+                "main.nss",
+                "#include \"guard_inc\"\nvoid main() { int n = getMaxSkillRank(OBJECT_SELF); }",
+            ),
+        ];
+        assert!(unused_imports(&files, "main.nss").is_empty());
+    }
+
+    #[test]
+    fn genuinely_unused_include_flagged() {
+        // main includes guard_inc but uses nothing from it or its include tree.
+        let files = [
+            ("_class_inc.nss", "int getMaxSkillRank(object oPC) { return 10; }"),
+            (
+                "guard_inc.nss",
+                "#include \"_class_inc\"\nint getIsGuard(object oNPC) { return 0; }",
+            ),
+            ("main.nss", "#include \"guard_inc\"\nvoid main() { int n = 5; }"),
+        ];
+        assert_eq!(unused_imports(&files, "main.nss"), vec!["guard_inc"]);
+    }
+
+    #[test]
+    fn directly_used_include_not_flagged() {
+        let files = [
+            ("util_inc.nss", "void DoThing() { }"),
+            ("main.nss", "#include \"util_inc\"\nvoid main() { DoThing(); }"),
+        ];
+        assert!(unused_imports(&files, "main.nss").is_empty());
+    }
 }

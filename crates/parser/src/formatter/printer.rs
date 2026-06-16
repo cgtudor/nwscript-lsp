@@ -718,12 +718,16 @@ impl<'a> Printer<'a> {
 
         match &v.initializer {
             Some(init) => {
-                let val = self.format_expr_str(init, self.current_indent_width());
-                if self.config.space_around_operators {
-                    line.push_str(&format!("{ty} {name} = {val};"));
+                let assign = if self.config.space_around_operators {
+                    " = "
                 } else {
-                    line.push_str(&format!("{ty} {name}={val};"));
-                }
+                    "="
+                };
+                line.push_str(&format!("{ty} {name}{assign}"));
+                let base_col = self.current_indent_width() + line.len();
+                let val = self.format_expr_str(init, base_col);
+                line.push_str(&val);
+                line.push(';');
             }
             None => {
                 line.push_str(&format!("{ty} {name};"));
@@ -1035,30 +1039,31 @@ impl<'a> Printer<'a> {
     // =========================================================================
 
     fn format_expr_str(&self, expr: &Expr, base_col: usize) -> String {
+        let cont = self.continuation_indent_str();
+        self.format_expr_inner(expr, base_col, &cont)
+    }
+
+    /// Format an expression to a string.
+    ///
+    /// `base_col` is the column where the expression begins, used for line-width
+    /// decisions. `cont` is the indentation string used for any continuation
+    /// lines produced when the expression wraps (call arguments, binary chains).
+    fn format_expr_inner(&self, expr: &Expr, base_col: usize, cont: &str) -> String {
         match expr {
             Expr::Literal(lit) => lit.span.text(self.source).to_string(),
 
             Expr::Ident(id) => id.name.clone(),
 
-            Expr::Binary(bin) => {
-                let left = self.format_expr_str(&bin.left, base_col);
-                let op = format_binary_op(bin.op);
-                let right = self.format_expr_str(&bin.right, base_col);
-                if self.config.space_around_operators {
-                    format!("{left} {op} {right}")
-                } else {
-                    format!("{left}{op}{right}")
-                }
-            }
+            Expr::Binary(bin) => self.format_binary(bin, base_col, cont),
 
             Expr::Unary(un) => {
                 let op = format_unary_op(un.op);
-                let operand = self.format_expr_str(&un.operand, base_col + op.len());
+                let operand = self.format_expr_inner(&un.operand, base_col + op.len(), cont);
                 format!("{op}{operand}")
             }
 
             Expr::Postfix(pf) => {
-                let operand = self.format_expr_str(&pf.operand, base_col);
+                let operand = self.format_expr_inner(&pf.operand, base_col, cont);
                 let op = match pf.op {
                     PostfixOp::Inc => "++",
                     PostfixOp::Dec => "--",
@@ -1066,51 +1071,22 @@ impl<'a> Printer<'a> {
                 format!("{operand}{op}")
             }
 
-            Expr::Call(call) => {
-                let callee = self.format_expr_str(&call.callee, base_col);
-                if call.args.is_empty() {
-                    return format!("{callee}()");
-                }
-
-                let sep = if self.config.space_after_comma {
-                    ", "
-                } else {
-                    ","
-                };
-                let args: Vec<String> = call
-                    .args
-                    .iter()
-                    .map(|a| self.format_expr_str(a, base_col))
-                    .collect();
-                let args_inline = args.join(sep);
-
-                let inner = if self.config.space_inside_parens {
-                    format!("( {args_inline} )")
-                } else {
-                    format!("({args_inline})")
-                };
-                let one_line = format!("{callee}{inner}");
-
-                if base_col + one_line.len() <= self.config.max_line_width {
-                    one_line
-                } else {
-                    // Wrap arguments — each on its own line
-                    let cont = self.continuation_indent_str();
-                    let wrap_sep = format!(",\n{cont}");
-                    let args_wrapped = args.join(&wrap_sep);
-                    format!("{callee}(\n{cont}{args_wrapped})")
-                }
-            }
+            Expr::Call(call) => self.format_call(call, base_col, cont),
 
             Expr::FieldAccess(fa) => {
-                let obj = self.format_expr_str(&fa.object, base_col);
+                let obj = self.format_expr_inner(&fa.object, base_col, cont);
                 format!("{obj}.{}", fa.field.name)
             }
 
             Expr::Assignment(a) => {
-                let target = self.format_expr_str(&a.target, base_col);
+                let target = self.format_expr_inner(&a.target, base_col, cont);
                 let op = format_assign_op(a.op);
-                let value = self.format_expr_str(&a.value, base_col);
+                let value_col = if self.config.space_around_operators {
+                    base_col + target.len() + op.len() + 2
+                } else {
+                    base_col + target.len() + op.len()
+                };
+                let value = self.format_expr_inner(&a.value, value_col, cont);
                 if self.config.space_around_operators {
                     format!("{target} {op} {value}")
                 } else {
@@ -1119,9 +1095,9 @@ impl<'a> Printer<'a> {
             }
 
             Expr::Ternary(t) => {
-                let cond = self.format_expr_str(&t.condition, base_col);
-                let then_e = self.format_expr_str(&t.then_expr, base_col);
-                let else_e = self.format_expr_str(&t.else_expr, base_col);
+                let cond = self.format_expr_inner(&t.condition, base_col, cont);
+                let then_e = self.format_expr_inner(&t.then_expr, base_col, cont);
+                let else_e = self.format_expr_inner(&t.else_expr, base_col, cont);
                 if self.config.space_around_operators {
                     format!("{cond} ? {then_e} : {else_e}")
                 } else {
@@ -1130,7 +1106,7 @@ impl<'a> Printer<'a> {
             }
 
             Expr::Paren(inner) => {
-                let inner_str = self.format_expr_str(inner, base_col + 1);
+                let inner_str = self.format_expr_inner(inner, base_col + 1, cont);
                 if self.config.space_inside_parens {
                     format!("( {inner_str} )")
                 } else {
@@ -1139,9 +1115,9 @@ impl<'a> Printer<'a> {
             }
 
             Expr::VectorLiteral(v) => {
-                let x = self.format_expr_str(&v.x, base_col);
-                let y = self.format_expr_str(&v.y, base_col);
-                let z = self.format_expr_str(&v.z, base_col);
+                let x = self.format_expr_inner(&v.x, base_col, cont);
+                let y = self.format_expr_inner(&v.y, base_col, cont);
+                let z = self.format_expr_inner(&v.z, base_col, cont);
                 if self.config.space_after_comma {
                     format!("[{x}, {y}, {z}]")
                 } else {
@@ -1154,6 +1130,124 @@ impl<'a> Printer<'a> {
                 span.text(self.source).to_string()
             }
         }
+    }
+
+    /// Format a function call, wrapping arguments one-per-line (Prettier-style)
+    /// when the single-line form would exceed `max_line_width`.
+    fn format_call(&self, call: &CallExpr, base_col: usize, cont: &str) -> String {
+        let callee = self.format_expr_inner(&call.callee, base_col, cont);
+        if call.args.is_empty() {
+            return format!("{callee}()");
+        }
+
+        let sep = if self.config.space_after_comma {
+            ", "
+        } else {
+            ","
+        };
+        let args_inline: Vec<String> = call
+            .args
+            .iter()
+            .map(|a| self.format_expr_inner(a, base_col, cont))
+            .collect();
+        let joined = args_inline.join(sep);
+
+        let inner = if self.config.space_inside_parens {
+            format!("( {joined} )")
+        } else {
+            format!("({joined})")
+        };
+        let one_line = format!("{callee}{inner}");
+
+        if base_col + one_line.len() <= self.config.max_line_width {
+            return one_line;
+        }
+
+        // Wrap arguments — each on its own line at the continuation indent.
+        // Re-format each argument at its true column so nested constructs (e.g.
+        // long string concatenations) wrap relative to where they actually sit.
+        let indent_unit = " ".repeat(self.config.indent_width);
+        let arg_cont = format!("{cont}{indent_unit}");
+        let args: Vec<String> = call
+            .args
+            .iter()
+            .map(|a| self.format_expr_inner(a, cont.len(), &arg_cont))
+            .collect();
+        let wrap_sep = format!(",\n{cont}");
+        let args_wrapped = args.join(&wrap_sep);
+        format!("{callee}(\n{cont}{args_wrapped})")
+    }
+
+    /// Format a binary expression. Same-precedence operator chains are flattened
+    /// and, when the flat form exceeds `max_line_width`, broken one-operand-per-line
+    /// with the operator trailing each line (Prettier-style). String literals are
+    /// never split, so a single over-long literal simply overflows.
+    fn format_binary(&self, bin: &BinaryExpr, base_col: usize, cont: &str) -> String {
+        let mut operands: Vec<&Expr> = Vec::new();
+        let mut ops: Vec<BinaryOp> = Vec::new();
+        self.flatten_binary(bin, &mut operands, &mut ops);
+
+        // Build the flat single-line form.
+        let parts: Vec<String> = operands
+            .iter()
+            .map(|o| self.format_expr_inner(o, base_col, cont))
+            .collect();
+        let mut flat = String::new();
+        for (i, part) in parts.iter().enumerate() {
+            flat.push_str(part);
+            if i < ops.len() {
+                if self.config.space_around_operators {
+                    flat.push_str(&format!(" {} ", format_binary_op(ops[i])));
+                } else {
+                    flat.push_str(format_binary_op(ops[i]));
+                }
+            }
+        }
+
+        if base_col + flat.len() <= self.config.max_line_width {
+            return flat;
+        }
+
+        // Break: operator trailing each line, continuation lines indented to `cont`.
+        let indent_unit = " ".repeat(self.config.indent_width);
+        let child_cont = format!("{cont}{indent_unit}");
+        let mut result = String::new();
+        for (i, operand) in operands.iter().enumerate() {
+            let oc = if i == 0 { base_col } else { cont.len() };
+            let s = self.format_expr_inner(operand, oc, &child_cont);
+            if i > 0 {
+                result.push_str(cont);
+            }
+            result.push_str(&s);
+            if i < ops.len() {
+                if self.config.space_around_operators {
+                    result.push(' ');
+                }
+                result.push_str(format_binary_op(ops[i]));
+                result.push('\n');
+            }
+        }
+        result
+    }
+
+    /// Flatten a left-associative chain of same-precedence binary operators into
+    /// flat lists of operands and operators.
+    fn flatten_binary<'e>(
+        &self,
+        bin: &'e BinaryExpr,
+        operands: &mut Vec<&'e Expr>,
+        ops: &mut Vec<BinaryOp>,
+    ) {
+        match &bin.left {
+            Expr::Binary(left_bin)
+                if binary_prec_group(left_bin.op) == binary_prec_group(bin.op) =>
+            {
+                self.flatten_binary(left_bin, operands, ops);
+            }
+            _ => operands.push(&bin.left),
+        }
+        ops.push(bin.op);
+        operands.push(&bin.right);
     }
 
     // =========================================================================
@@ -1215,6 +1309,24 @@ fn format_binary_op(op: BinaryOp) -> &'static str {
         BinaryOp::BitXor => "^",
         BinaryOp::Shl => "<<",
         BinaryOp::Shr => ">>",
+    }
+}
+
+/// Precedence-group key for binary operators. Operators in the same group are
+/// flattened together when wrapping a long binary chain (e.g. `+` and `-`). Only
+/// equality between keys is meaningful; the absolute values are arbitrary.
+fn binary_prec_group(op: BinaryOp) -> u8 {
+    match op {
+        BinaryOp::Or => 1,
+        BinaryOp::And => 2,
+        BinaryOp::BitOr => 3,
+        BinaryOp::BitXor => 4,
+        BinaryOp::BitAnd => 5,
+        BinaryOp::Eq | BinaryOp::Neq => 6,
+        BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => 7,
+        BinaryOp::Shl | BinaryOp::Shr => 8,
+        BinaryOp::Add | BinaryOp::Sub => 9,
+        BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 10,
     }
 }
 

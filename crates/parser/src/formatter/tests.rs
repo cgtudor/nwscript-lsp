@@ -98,6 +98,68 @@ fn format_function_wraps_long_params() {
     assert!(result.contains(",\n    string sSecondParam"));
 }
 
+#[test]
+fn format_wraps_long_string_concat_in_call() {
+    let mut config = FormatConfig::default();
+    config.max_line_width = 40;
+    let input = "void main(){SendMessage(oPC, \"alpha beta\" + \"gamma delta\" + \"epsilon\");}";
+    let expected = "\
+void main()
+{
+    SendMessage(
+        oPC,
+        \"alpha beta\" +
+            \"gamma delta\" +
+            \"epsilon\");
+}
+";
+    assert_eq!(fmt_with(input, &config), expected);
+}
+
+#[test]
+fn format_wraps_long_string_concat_in_vardecl() {
+    let mut config = FormatConfig::default();
+    config.max_line_width = 40;
+    let input = "void main(){string s = \"alpha beta\" + \"gamma delta\" + \"epsilon zeta\";}";
+    let expected = "\
+void main()
+{
+    string s = \"alpha beta\" +
+        \"gamma delta\" +
+        \"epsilon zeta\";
+}
+";
+    assert_eq!(fmt_with(input, &config), expected);
+}
+
+#[test]
+fn format_does_not_split_single_long_literal() {
+    let mut config = FormatConfig::default();
+    config.max_line_width = 40;
+    // A single string literal cannot be split; it stays intact and overflows.
+    let input = "void main(){SendMessage(oPC, \"one enormous unbroken literal exceeding width\");}";
+    let result = fmt_with(input, &config);
+    assert!(result.contains("\"one enormous unbroken literal exceeding width\")"));
+}
+
+#[test]
+fn format_short_concat_stays_inline() {
+    // Under the width limit, a concatenation is not broken.
+    let input = "void main(){string s = \"a\" + \"b\" + \"c\";}";
+    let result = fmt(input);
+    assert!(result.contains("string s = \"a\" + \"b\" + \"c\";"));
+}
+
+#[test]
+fn format_wrapped_concat_idempotent() {
+    let mut config = FormatConfig::default();
+    config.max_line_width = 40;
+    let input = "void main(){SendMessage(oPC, \"alpha beta\" + \"gamma delta\" + \"epsilon\");}";
+    let once = fmt_with(input, &config);
+    let twice = fmt_with(&once, &config);
+    assert_eq!(once, twice);
+}
+
 // =============================================================================
 // Control flow
 // =============================================================================
